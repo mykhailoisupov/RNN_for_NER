@@ -1,0 +1,14 @@
+/data/*
+!/data/.gitkeep
+.venv/
+.ipynb_checkpoints/
+__pycache__/
+/mlruns/*
+!/mlruns/.gitkeep
+/models/*
+!/models/.gitkeep
+submission/
+/results/*
+!/data/folds.csv
+.env
+.DS_Store

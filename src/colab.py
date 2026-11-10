@@ -1,10 +1,3 @@
-"""Підготовка Colab: залежності, дані з Kaggle, логін у W&B.
-
-Викликається з першої клітинки notebooks/train.ipynb після того, як код гілки вже склоновано.
-Ключі (WANDB_API_KEY, KAGGLE_USERNAME, KAGGLE_KEY) беруться з .env (див. .env.example),
-який лежить у /content/ або в корені репо; якщо ключа немає — питається вручну.
-"""
-
 import os
 import subprocess
 import sys
@@ -29,7 +22,7 @@ def load_env():
                 os.environ.setdefault(key.strip(), value.strip().strip("'\""))
         print("env:", path)
         return
-    print("env: .env не знайдено, ключі спитаю вручну")
+    print("env: .env not found, keys will be prompted")
 
 
 def secret(name):
@@ -46,7 +39,7 @@ def download_data():
         print("data: ok")
         return
     if not KAGGLE_COMPETITION:
-        raise RuntimeError("заповни KAGGLE_COMPETITION у src/config.py або поклади файли в data/ вручну")
+        raise RuntimeError("set KAGGLE_COMPETITION in src/config.py or put the files into data/ manually")
     os.environ["KAGGLE_USERNAME"] = secret("KAGGLE_USERNAME")
     os.environ["KAGGLE_KEY"] = secret("KAGGLE_KEY")
     DATA_DIR.mkdir(exist_ok=True)
@@ -57,7 +50,7 @@ def download_data():
         archive.unlink()
     missing = [f for f in DATA_FILES if not (DATA_DIR / f).exists()]
     if missing:
-        raise RuntimeError(f"після завантаження бракує: {missing}; є: {sorted(p.name for p in DATA_DIR.iterdir())}")
+        raise RuntimeError(f"missing after download: {missing}; found: {sorted(p.name for p in DATA_DIR.iterdir())}")
     print("data: downloaded")
 
 
@@ -74,4 +67,4 @@ def setup():
     login_wandb()
     import torch
 
-    print("device:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu")
+    print("device:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU")

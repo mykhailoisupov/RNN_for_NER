@@ -13,7 +13,7 @@ RNNS = {"lstm": nn.LSTM, "gru": nn.GRU}
 
 def build_embedder(vectors, cfg: Config):
     if cfg.embedding in ("fasttext", "bpemb"):
-        return FastTextEmbedder(vectors, cfg)  # обидва: номер → вектор з таблиці
+        return FastTextEmbedder(vectors, cfg)
     if cfg.embedding == "flair":
         return FlairEmbedder(cfg)
     raise ValueError(f"unknown embedding: {cfg.embedding}")

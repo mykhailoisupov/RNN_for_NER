@@ -9,7 +9,7 @@ SUBMISSION_DIR = ROOT / "submission"
 
 WANDB_ENTITY = "whoresandbaddies"
 WANDB_PROJECT = "rnn-for-ner"
-KAGGLE_COMPETITION = ""  # TODO: slug змагання з URL kaggle.com/competitions/<slug>
+KAGGLE_COMPETITION = "kse-ua-location-extraction-2026"
 
 TAGS = ["O", "B-LOC", "I-LOC"]
 EVAL_SETS = ["val", "sample"]

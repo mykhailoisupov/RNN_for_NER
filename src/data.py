@@ -184,8 +184,6 @@ class BPEmbEncoder:
 
 
 class WordEncoder:
-    """Flair бере вектори з batch["words"], тож тут лише один токен на слово, без таблиці."""
-
     vectors = None
 
     def encode(self, word):

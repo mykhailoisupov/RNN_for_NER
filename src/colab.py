@@ -1,8 +1,8 @@
 """Підготовка Colab: залежності, дані з Kaggle, логін у W&B.
 
 Викликається з першої клітинки notebooks/train.ipynb після того, як код гілки вже склоновано.
-Ключі беруться з Colab Secrets (WANDB_API_KEY, KAGGLE_USERNAME, KAGGLE_KEY),
-а якщо їх немає — зі змінних оточення або питаються вручну.
+Ключі (WANDB_API_KEY, KAGGLE_USERNAME, KAGGLE_KEY) беруться з .env (див. .env.example),
+який лежить у /content/ або в корені репо; якщо ключа немає — питається вручну.
 """
 
 import os
@@ -10,22 +10,29 @@ import subprocess
 import sys
 import zipfile
 from getpass import getpass
+from pathlib import Path
 
-from src.config import DATA_DIR, KAGGLE_COMPETITION
+from src.config import DATA_DIR, KAGGLE_COMPETITION, ROOT
 
 PACKAGES = ["lightning", "wandb", "bpemb", "kaggle", "flair>=0.15"]
 DATA_FILES = ["uk_geo_dataset.csv", "test.csv", "labeling_sample.csv"]
+ENV_FILES = [Path("/content/.env"), ROOT / ".env"]
+
+
+def load_env():
+    for path in ENV_FILES:
+        if not path.exists():
+            continue
+        for line in path.read_text().splitlines():
+            key, sep, value = line.partition("=")
+            if sep and not key.strip().startswith("#") and value.strip():
+                os.environ.setdefault(key.strip(), value.strip().strip("'\""))
+        print("env:", path)
+        return
+    print("env: .env не знайдено, ключі спитаю вручну")
 
 
 def secret(name):
-    try:
-        from google.colab import userdata
-
-        value = userdata.get(name)
-        if value:
-            return value
-    except Exception:
-        pass
     return os.environ.get(name) or getpass(f"{name}: ")
 
 
@@ -61,6 +68,7 @@ def login_wandb():
 
 
 def setup():
+    load_env()
     install()
     download_data()
     login_wandb()

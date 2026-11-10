@@ -2,6 +2,7 @@
 !/data/.gitkeep
 /docs/*
 !/docs/.gitkeep
+!/docs/architectures.md
 .venv/
 .ipynb_checkpoints/
 __pycache__/

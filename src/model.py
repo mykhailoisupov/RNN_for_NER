@@ -11,10 +11,18 @@ from src.data import IGNORE, PAD, score
 RNNS = {"lstm": nn.LSTM, "gru": nn.GRU}
 
 
+def build_embedder(vectors, cfg: Config):
+    if cfg.embedding in ("fasttext", "bpemb"):
+        return FastTextEmbedder(vectors, cfg)  # обидва: номер → вектор з таблиці
+    if cfg.embedding == "flair":
+        return FlairEmbedder(cfg)
+    raise ValueError(f"unknown embedding: {cfg.embedding}")
+
+
 class RNNTagger(nn.Module):
     def __init__(self, vectors, cfg: Config):
         super().__init__()
-        self.embedder = FastTextEmbedder(vectors, cfg)
+        self.embedder = build_embedder(vectors, cfg)
         self.encoder = RNNEncoder(self.embedder.output_dim, cfg)
         self.dropout = nn.Dropout(cfg.dropout)
         self.head = nn.Linear(self.encoder.output_dim, len(TAGS))
@@ -110,9 +118,6 @@ class FlairEmbedder(nn.Module):
         super().__init__()
         from flair.embeddings import FlairEmbeddings
         from huggingface_hub import hf_hub_download
-
-        # не через назви "uk-forward"/"uk-backward": Flair кешує обидві як best-lm.pt,
-        # і backward тихо підміняється forward-моделлю
         def load(repo):
             return FlairEmbeddings(hf_hub_download(repo, "best-lm.pt")).lm
 
@@ -138,8 +143,8 @@ class FlairEmbedder(nn.Module):
             start = 0
             for j, word in enumerate(sentence):
                 end = start + len(word)
-                f = end + 1            # "\n" зсуває все на 1 → пробіл після слова
-                b = len(texts[i]) + 1 - start  # у перевернутому тексті: пробіл перед словом
+                f = end + 1
+                b = len(texts[i]) + 1 - start
                 out[i, j] = torch.cat([fwd[f, i], bwd[b, i]])
                 start = end + 1
         return out

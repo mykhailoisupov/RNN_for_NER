@@ -183,11 +183,22 @@ class BPEmbEncoder:
         return [i + 1 for i in self.bpemb.encode_ids(word)]
 
 
+class WordEncoder:
+    """Flair бере вектори з batch["words"], тож тут лише один токен на слово, без таблиці."""
+
+    vectors = None
+
+    def encode(self, word):
+        return [UNK]
+
+
 def build_encoder(cfg, splits):
     if cfg.embedding == "fasttext":
         return FastTextEncoder(splits, cfg.min_freq)
     if cfg.embedding == "bpemb":
         return BPEmbEncoder(cfg.bpe_vocab_size)
+    if cfg.embedding == "flair":
+        return WordEncoder()
     raise ValueError(f"unknown embedding: {cfg.embedding}")
 
 

@@ -103,3 +103,43 @@ class Tagger(L.LightningModule):
     def configure_optimizers(self):
         params = [p for p in self.parameters() if p.requires_grad]
         return torch.optim.AdamW(params, lr=self.cfg.lr, weight_decay=self.cfg.weight_decay)
+
+
+class FlairEmbedder(nn.Module):
+    def __init__(self, cfg: Config):
+        super().__init__()
+        from flair.embeddings import FlairEmbeddings
+        from huggingface_hub import hf_hub_download
+
+        # не через назви "uk-forward"/"uk-backward": Flair кешує обидві як best-lm.pt,
+        # і backward тихо підміняється forward-моделлю
+        def load(repo):
+            return FlairEmbeddings(hf_hub_download(repo, "best-lm.pt")).lm
+
+        self.forward_lm = load("dchaplinsky/flair-uk-forward")
+        self.backward_lm = load("dchaplinsky/flair-uk-backward")
+        assert self.forward_lm.is_forward_lm and not self.backward_lm.is_forward_lm
+        for p in self.parameters():
+            p.requires_grad = False
+        self.output_dim = self.forward_lm.hidden_size * 2
+
+    @torch.no_grad()
+    def forward(self, batch):
+        import flair
+        flair.device = batch["ids"].device
+        words = batch["words"]
+        texts = [" ".join(w) for w in words]
+
+        fwd = self.forward_lm.get_representation(texts, "\n", " ")
+        bwd = self.backward_lm.get_representation(texts, "\n", " ")
+
+        out = torch.zeros(len(words), batch["ids"].size(1), self.output_dim, device=fwd.device)
+        for i, sentence in enumerate(words):
+            start = 0
+            for j, word in enumerate(sentence):
+                end = start + len(word)
+                f = end + 1            # "\n" зсуває все на 1 → пробіл після слова
+                b = len(texts[i]) + 1 - start  # у перевернутому тексті: пробіл перед словом
+                out[i, j] = torch.cat([fwd[f, i], bwd[b, i]])
+                start = end + 1
+        return out

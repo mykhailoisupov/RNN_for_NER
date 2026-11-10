@@ -1,5 +1,7 @@
 /data/*
 !/data/.gitkeep
+/docs/*
+!/docs/.gitkeep
 .venv/
 .ipynb_checkpoints/
 __pycache__/

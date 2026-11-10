@@ -1,15 +1,36 @@
+import importlib.util
 import os
 import subprocess
 import sys
+import time
 import zipfile
+from contextlib import contextmanager
 from getpass import getpass
 from pathlib import Path
 
 from src.config import DATA_DIR, KAGGLE_COMPETITION, ROOT
 
-PACKAGES = ["lightning", "wandb", "bpemb", "kaggle", "flair>=0.15"]
+PACKAGES = {"lightning": "lightning", "wandb": "wandb", "bpemb": "bpemb", "kaggle": "kaggle", "flair": "flair>=0.15"}
 DATA_FILES = ["uk_geo_dataset.csv", "test.csv", "labeling_sample.csv"]
 ENV_FILES = [Path("/content/.env"), ROOT / ".env"]
+
+
+@contextmanager
+def step(title):
+    print(f"\n▶ {title}", flush=True)
+    start = time.time()
+    yield
+    print(f"✔ {title} ({time.time() - start:.0f}s)", flush=True)
+
+
+def sh(cmd):
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    lines = []
+    for line in process.stdout:
+        print("  " + line, end="", flush=True)
+        lines.append(line)
+    if process.wait():
+        raise RuntimeError(f"command failed: {' '.join(cmd)}\n{''.join(lines[-30:])}")
 
 
 def load_env():
@@ -39,7 +60,12 @@ def secret(name):
 
 
 def install():
-    subprocess.run([sys.executable, "-m", "pip", "install", "-q", *PACKAGES], check=True)
+    missing = [spec for module, spec in PACKAGES.items() if importlib.util.find_spec(module) is None]
+    if not missing:
+        print("packages: already installed")
+        return
+    print("installing:", ", ".join(missing))
+    sh([sys.executable, "-m", "pip", "install", "-q", "--progress-bar", "off", *missing])
 
 
 def download_data():
@@ -56,14 +82,9 @@ def download_data():
         os.environ["KAGGLE_USERNAME"] = secret("KAGGLE_USERNAME")
         os.environ["KAGGLE_KEY"] = secret("KAGGLE_KEY")
     DATA_DIR.mkdir(exist_ok=True)
-    result = subprocess.run(
-        ["kaggle", "competitions", "download", "-c", KAGGLE_COMPETITION, "-p", str(DATA_DIR)],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode:
-        raise RuntimeError(f"kaggle download failed:\n{result.stdout}\n{result.stderr}")
+    sh(["kaggle", "competitions", "download", "-c", KAGGLE_COMPETITION, "-p", str(DATA_DIR)])
     for archive in DATA_DIR.glob("*.zip"):
+        print("unzipping:", archive.name)
         with zipfile.ZipFile(archive) as z:
             z.extractall(DATA_DIR)
         archive.unlink()
@@ -80,10 +101,14 @@ def login_wandb():
 
 
 def setup():
-    load_env()
-    install()
-    download_data()
-    login_wandb()
+    with step("1/4 keys"):
+        load_env()
+    with step("2/4 packages"):
+        install()
+    with step("3/4 data"):
+        download_data()
+    with step("4/4 W&B login"):
+        login_wandb()
     import torch
 
-    print("device:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU")
+    print("\ndevice:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU")

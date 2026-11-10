@@ -231,13 +231,15 @@ class NERDataset(Dataset):
 
     def __getitem__(self, i):
         example = self.examples[i]
-        return i, torch.tensor(example.ids), torch.tensor(example.labels)
+        words = [word for word, _, _ in example.words]
+        return i, torch.tensor(example.ids), torch.tensor(example.labels), words
 
 
 def collate(batch):
-    idx, ids, labels = zip(*batch)
+    idx, ids, labels, words = zip(*batch)
     return {
         "idx": torch.tensor(idx),
+        "words": list(words),
         "ids": pad_sequence(ids, batch_first=True, padding_value=PAD),
         "labels": pad_sequence(labels, batch_first=True, padding_value=IGNORE),
         "lengths": torch.tensor([len(x) for x in ids]),

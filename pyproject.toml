@@ -14,11 +14,16 @@ dependencies = [
     "pyarrow>=26.0.1",
     "scikit-learn>=1.9.1",
     "seqeval>=1.2.2",
-    "tokenizers>=0.23.3",
+    "tokenizers>=0.22",
     "torch>=2.15.0",
     "torchmetrics>=1.9.0",
     "tqdm>=4.70.1",
     "wandb>=0.31.0",
+]
+
+[project.optional-dependencies]
+flair = [
+    "flair>=0.15",
 ]
 
 [dependency-groups]

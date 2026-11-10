@@ -14,28 +14,49 @@ RNNS = {"lstm": nn.LSTM, "gru": nn.GRU}
 class RNNTagger(nn.Module):
     def __init__(self, vectors, cfg: Config):
         super().__init__()
+        self.embedder = FastTextEmbedder(vectors, cfg)
+        self.encoder = RNNEncoder(self.embedder.output_dim, cfg)
+        self.dropout = nn.Dropout(cfg.dropout)
+        self.head = nn.Linear(self.encoder.output_dim, len(TAGS))
+
+    def forward(self, batch):
+        x = self.dropout(self.embedder(batch))
+        out = self.encoder(x, batch["lengths"])
+        return self.head(self.dropout(out))
+
+
+class FastTextEmbedder(nn.Module):
+    def __init__(self, vectors, cfg: Config):
+        super().__init__()
         self.embedding = nn.Embedding.from_pretrained(
             torch.as_tensor(vectors), freeze=cfg.freeze_embeddings, padding_idx=PAD
         )
+        self.output_dim = vectors.shape[1]
+
+    def forward(self, batch):
+        return self.embedding(batch["ids"])
+
+
+class RNNEncoder(nn.Module):
+    def __init__(self, input_dim, cfg: Config):
+        super().__init__()
         self.rnn = RNNS[cfg.rnn](
-            vectors.shape[1],
+            input_dim,
             cfg.hidden_size,
             cfg.num_layers,
             batch_first=True,
             bidirectional=cfg.bidirectional,
             dropout=cfg.dropout if cfg.num_layers > 1 else 0.0,
         )
-        self.dropout = nn.Dropout(cfg.dropout)
         directions = 2 if cfg.bidirectional else 1
-        self.head = nn.Linear(directions * cfg.hidden_size, len(TAGS))
+        self.output_dim = directions * cfg.hidden_size
 
-    def forward(self, ids, lengths):
-        x = self.dropout(self.embedding(ids))
+    def forward(self, x, lengths):
         packed = pack_padded_sequence(x, lengths.cpu(), batch_first=True, enforce_sorted=False)
         out, _ = self.rnn(packed)
-        out, _ = pad_packed_sequence(out, batch_first=True, total_length=ids.size(1))
-        return self.head(self.dropout(out))
-
+        out, _ = pad_packed_sequence(out, batch_first=True, total_length=x.size(1))
+        return out
+    
 
 class Tagger(L.LightningModule):
     def __init__(self, cfg: Config, vectors):
@@ -45,7 +66,7 @@ class Tagger(L.LightningModule):
         self.outputs = {}
 
     def forward(self, batch):
-        return self.model(batch["ids"], batch["lengths"])
+        return self.model(batch)
 
     def loss(self, logits, labels):
         return F.cross_entropy(logits.flatten(0, 1), labels.flatten(), ignore_index=IGNORE)

@@ -1,14 +1,23 @@
+from functools import partial
+
 import lightning as L
 import torch
 import torch.nn.functional as F
 from torch import nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
+from torch.optim.lr_scheduler import CosineAnnealingLR, OneCycleLR, ReduceLROnPlateau
 
 from src.config import EVAL_SETS, TAGS, Config
 from src.data import IGNORE, PAD, score
 
 
 RNNS = {"lstm": nn.LSTM, "gru": nn.GRU}
+OPTIMIZERS = {
+    "adamw": torch.optim.AdamW,
+    "adam": torch.optim.Adam,
+    "radam": torch.optim.RAdam,
+    "sgd": partial(torch.optim.SGD, momentum=0.9, nesterov=True),
+}
 
 
 def build_embedder(vectors, cfg: Config):
@@ -110,7 +119,20 @@ class Tagger(L.LightningModule):
 
     def configure_optimizers(self):
         params = [p for p in self.parameters() if p.requires_grad]
-        return torch.optim.AdamW(params, lr=self.cfg.lr, weight_decay=self.cfg.weight_decay)
+        optimizer = OPTIMIZERS[self.cfg.optimizer](params, lr=self.cfg.lr, weight_decay=self.cfg.weight_decay)
+        if self.cfg.scheduler == "none":
+            return optimizer
+        if self.cfg.scheduler == "plateau":
+            scheduler = ReduceLROnPlateau(optimizer, mode="max", factor=0.5, patience=1)
+            return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "monitor": self.cfg.monitor}}
+        steps = self.trainer.estimated_stepping_batches
+        if self.cfg.scheduler == "cosine":
+            scheduler = CosineAnnealingLR(optimizer, T_max=steps)
+        elif self.cfg.scheduler == "onecycle":
+            scheduler = OneCycleLR(optimizer, max_lr=self.cfg.lr, total_steps=steps)
+        else:
+            raise ValueError(f"unknown scheduler: {self.cfg.scheduler}")
+        return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "step"}}
 
 
 class FlairEmbedder(nn.Module):
@@ -127,6 +149,12 @@ class FlairEmbedder(nn.Module):
         for p in self.parameters():
             p.requires_grad = False
         self.output_dim = self.forward_lm.hidden_size * 2
+
+    def train(self, mode=True):
+        super().train(mode)
+        self.forward_lm.eval()
+        self.backward_lm.eval()
+        return self
 
     @torch.no_grad()
     def forward(self, batch):

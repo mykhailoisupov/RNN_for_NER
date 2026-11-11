@@ -27,10 +27,13 @@ class Config:
     hidden_size: int = 256
     num_layers: int = 2
     dropout: float = 0.3
+    optimizer: str = "adamw"
+    scheduler: str = "none"
     lr: float = 1e-3
     weight_decay: float = 1e-2
     batch_size: int = 128
     epochs: int = 5
+    patience: int = 0
     grad_clip: float = 1.0
     monitor: str = "val/f1"
     seed: int = 42

@@ -1,6 +1,4 @@
 import gzip
-import re
-import string
 import urllib.request
 from collections import Counter
 from dataclasses import dataclass
@@ -14,9 +12,10 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset
 
 from src.config import DATA_DIR, EMBEDDINGS_DIR, EVAL_SETS, TAGS, Config
+from src.postprocess import hard_processing, to_submission
+from src.text import parse_spans, prepare, tokenize
 
-WORD = re.compile(r"\w+(?:[-'’ʼ]\w+)*|[^\w\s]")
-SPAN = re.compile(r"\((\d+),\s*(\d+)\)")
+NORMALIZED_DIR = DATA_DIR / "normalized"
 FASTTEXT_URL = "https://dl.fbaipublicfiles.com/fasttext/vectors-crawl/cc.uk.300.vec.gz"
 TAG_ID = {tag: i for i, tag in enumerate(TAGS)}
 PAD, UNK, IGNORE = 0, 1, -100
@@ -33,11 +32,9 @@ class Example:
 
 
 def split_words(text):
-    return [(m.group(), m.start(), m.end()) for m in WORD.finditer(text)]
-
-
-def parse_spans(value):
-    return [(int(a), int(b)) for a, b in SPAN.findall(str(value))]
+    """Tokens of prepare(text); prepare keeps the length, so offsets also cut the original."""
+    prepared = prepare(text)
+    return [(prepared[a:b], a, b) for a, b in tokenize(prepared)]
 
 
 def spans_to_tags(words, spans):
@@ -48,25 +45,6 @@ def spans_to_tags(words, spans):
             if tags[i] == "O":
                 tags[i] = "B-LOC" if k == 0 else "I-LOC"
     return tags
-
-
-def tags_to_locations(text, words, tags):
-    spans, prev = [], "O"
-    for (_, start, end), tag in zip(words, tags):
-        if tag == "I-LOC" and prev != "O":
-            spans[-1][1] = end
-        elif tag != "O":
-            spans.append([start, end])
-        prev = tag
-    return [text[a:b] for a, b in spans]
-
-
-def hard_processing(text):
-    text = re.sub(r"[{re.escape(string.punctuation)}]", "", text)
-    text = re.sub(r'\d', '', text)
-    text = re.sub(r'\b\w\b\s?', '', text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text.lower()
 
 
 def comp_metric(y_true: List[List[str]], y_pred: List[List[str]]):
@@ -106,22 +84,22 @@ def comp_metric(y_true: List[List[str]], y_pred: List[List[str]]):
 
 
 def load_splits(train_size, seed):
-    uk = pd.read_csv(DATA_DIR / "uk_geo_dataset.csv", usecols=["text", "loc_markers", "is_valid"])
-    train = uk[uk["is_valid"] == 0]
+    """train/val: posts from scripts/build_dataset.py; sample/test: raw competition files."""
+    train = pd.read_parquet(NORMALIZED_DIR / "train.parquet", columns=["text", "spans"])
     if train_size:
         train = train.sample(min(train_size, len(train)), random_state=seed)
-    val = uk[uk["is_valid"] == 1]
+    val = pd.read_parquet(NORMALIZED_DIR / "val.parquet", columns=["text", "spans"])
     sample = pd.read_csv(DATA_DIR / "labeling_sample.csv")
     test = pd.read_csv(DATA_DIR / "test.csv")
 
-    def rows(texts, markers):
-        return [(text, split_words(text), parse_spans(m)) for text, m in zip(texts, markers)]
+    def rows(texts, spans):
+        return [(text, split_words(text), [(int(a), int(b)) for a, b in s]) for text, s in zip(texts, spans)]
 
     splits = {
-        "train": rows(train["text"], train["loc_markers"]),
-        "val": rows(val["text"], val["loc_markers"]),
-        "sample": rows(sample["text"], sample["loc_markers"]),
-        "test": rows(test["text"], ["[]"] * len(test)),
+        "train": rows(train["text"], train["spans"]),
+        "val": rows(val["text"], val["spans"]),
+        "sample": rows(sample["text"], sample["loc_markers"].map(parse_spans)),
+        "test": rows(test["text"], [[]] * len(test)),
     }
     return splits, test["text_id"].tolist()
 
@@ -221,8 +199,9 @@ def encode(rows, encoder):
 
 
 def predicted_locations(example, piece_tags):
-    tags = [TAGS[piece_tags[i]] for i in example.word_starts]
-    return tags_to_locations(example.text, example.words, tags)
+    tags = [TAGS[piece_tags[i]][0] for i in example.word_starts]   # B-LOC -> B, as src.text expects
+    offsets = [(start, end) for _, start, end in example.words]
+    return to_submission(example.text, offsets, tags)
 
 
 def score(examples, predictions):

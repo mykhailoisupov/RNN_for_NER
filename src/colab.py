@@ -8,10 +8,11 @@ from contextlib import contextmanager
 from getpass import getpass
 from pathlib import Path
 
-from src.config import DATA_DIR, KAGGLE_COMPETITION, ROOT
+from src.config import DATA_DIR, KAGGLE_COMPETITION, ROOT, WANDB_ENTITY, WANDB_PROJECT
 
 PACKAGES = {"lightning": "lightning", "wandb": "wandb", "bpemb": "bpemb", "kaggle": "kaggle", "flair": "flair>=0.15"}
-DATA_FILES = ["uk_geo_dataset.csv", "test.csv", "labeling_sample.csv"]
+DATA_FILES = ["test.csv", "labeling_sample.csv"]
+NORMALIZED = ["train.parquet", "val.parquet"]
 ENV_FILES = [Path("/content/.env"), ROOT / ".env"]
 
 
@@ -94,6 +95,19 @@ def download_data():
     print("data: downloaded")
 
 
+def download_normalized():
+    """train/val built by scripts/build_dataset.py, uploaded there with --upload."""
+    out = DATA_DIR / "normalized"
+    if all((out / f).exists() for f in NORMALIZED):
+        print("normalized: ok")
+        return
+    import wandb
+
+    artifact = wandb.Api().artifact(f"{WANDB_ENTITY}/{WANDB_PROJECT}/normalized:latest")
+    artifact.download(str(out))
+    print("normalized:", artifact.version)
+
+
 def login_wandb():
     import wandb
 
@@ -105,10 +119,11 @@ def setup():
         load_env()
     with step("2/4 packages"):
         install()
-    with step("3/4 data"):
-        download_data()
-    with step("4/4 W&B login"):
+    with step("3/4 W&B login"):
         login_wandb()
+    with step("4/4 data"):
+        download_data()
+        download_normalized()
     import torch
 
     print("\ndevice:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU")

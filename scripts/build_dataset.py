@@ -340,11 +340,27 @@ def build(rebuild=False, drop_ukraine=False, ru_share=RU_SHARE, seed=0):
     return result
 
 
+def upload():
+    """Log train/val parquet as W&B artifact `normalized`; colab.setup() downloads the latest one."""
+    import wandb
+
+    from src.config import WANDB_ENTITY, WANDB_PROJECT
+
+    with wandb.init(entity=WANDB_ENTITY, project=WANDB_PROJECT, job_type="dataset") as run:
+        artifact = wandb.Artifact("normalized", type="dataset")
+        for split in ("train", "val"):
+            artifact.add_file(str(OUT / f"{split}.parquet"))
+        run.log_artifact(artifact)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--rebuild", action="store_true", help="redo the cleaning stage even if cached")
     parser.add_argument("--drop-ukraine", action="store_true", help="do not label Україна/Украина")
     parser.add_argument("--ru-share", type=float, default=RU_SHARE)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--upload", action="store_true", help="log train/val parquet to W&B for Colab")
     args = parser.parse_args()
     build(args.rebuild, args.drop_ukraine, args.ru_share, args.seed)
+    if args.upload:
+        upload()

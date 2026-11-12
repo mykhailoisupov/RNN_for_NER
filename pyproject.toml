@@ -5,7 +5,9 @@ description = ""
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "datasketch>=2.0,<3",
     "lightning>=2.6.6",
+    "lingua-language-detector>=2,<3",
     "matplotlib>=3.11.2",
     "numpy>=2.4.6",
     "optuna>=5.0.0",

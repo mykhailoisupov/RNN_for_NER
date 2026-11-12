@@ -135,7 +135,13 @@ class FastTextEncoder:
         seen = {word for rows in splits.values() for _, words, _ in rows for word, _, _ in words}
 
         def row(word):
-            return index.get(word, index.get(word.lower()))
+            # prepare() turns every apostrophe into ', which cc.uk.300 never has: it spells such words
+            # without one (Соломянському, памяті), a few with ʼ (памʼять).
+            for form in (word, word.replace("'", "ʼ"), word.replace("'", "")):
+                for f in (form, form.lower()):
+                    if f in index:
+                        return index[f]
+            return None
 
         vocab = sorted(w for w in seen if row(w) is not None or counts[w] >= min_freq)
         self.vocab = {word: i + 2 for i, word in enumerate(vocab)}

@@ -11,6 +11,35 @@ from src.config import EVAL_SETS, TAGS, Config
 from src.data import IGNORE, PAD, score
 
 
+O_TAG, I_TAG = TAGS.index("O"), TAGS.index("I-LOC")
+
+
+def viterbi(logits, lengths):
+    """Best tag path per sequence with O->I and start->I forbidden, so no span starts on I (argmax gave
+    `Михайлівського` + `собору` around an O). Returns one list of tag ids per sequence, cut to its length."""
+    logp = logits.float().log_softmax(-1)
+    ban = torch.zeros(len(TAGS), len(TAGS), device=logp.device)
+    ban[O_TAG, I_TAG] = float("-inf")
+    score = logp[:, 0].clone()
+    score[:, I_TAG] = float("-inf")
+    back = []
+    for t in range(1, logp.size(1)):
+        best, prev = (score.unsqueeze(2) + ban).max(1)          # [batch, prev, cur] -> [batch, cur]
+        back.append(prev)
+        alive = (t < lengths.to(logp.device)).unsqueeze(1)
+        score = torch.where(alive, best + logp[:, t], score)     # padding keeps the score of the last token
+    back = torch.stack(back, 1).tolist() if back else []
+    paths = []
+    for b, n in enumerate(lengths.tolist()):
+        tag = int(score[b].argmax())
+        path = [tag]
+        for t in range(n - 1, 0, -1):
+            tag = back[b][t - 1][tag]
+            path.append(tag)
+        paths.append(path[::-1])
+    return paths
+
+
 RNNS = {"lstm": nn.LSTM, "gru": nn.GRU}
 OPTIMIZERS = {
     "adamw": torch.optim.AdamW,
@@ -89,11 +118,7 @@ class Tagger(L.LightningModule):
         return F.cross_entropy(logits.flatten(0, 1), labels.flatten(), ignore_index=IGNORE)
 
     def predictions(self, logits, batch):
-        tags = logits.argmax(-1)
-        return [
-            (i, row[:n].tolist())
-            for i, row, n in zip(batch["idx"].tolist(), tags, batch["lengths"].tolist())
-        ]
+        return list(zip(batch["idx"].tolist(), viterbi(logits, batch["lengths"])))
 
     def training_step(self, batch, batch_idx):
         loss = self.loss(self(batch), batch["labels"])

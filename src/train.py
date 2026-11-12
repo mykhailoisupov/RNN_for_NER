@@ -11,6 +11,7 @@ from lightning.pytorch.loggers import WandbLogger
 from src.config import MODELS_DIR, SUBMISSION_DIR, WANDB_ENTITY, WANDB_PROJECT, Config
 from src.data import NERDataModule, predicted_locations
 from src.model import Tagger
+from src.postprocess import add_capital
 
 NAME_SKIP = {"embedding", "rnn", "bidirectional", "name", "wandb_mode", "accelerator"}
 
@@ -65,7 +66,10 @@ def run(cfg: Config):
     examples = data.examples["test"]
     submission = pd.DataFrame({
         "text_id": [data.test_ids[i] for i, _ in predictions],
-        "locations": [json.dumps(predicted_locations(examples[i], tags), ensure_ascii=False) for i, tags in predictions],
+        "locations": [
+            json.dumps(add_capital(examples[i].text, predicted_locations(examples[i], tags)), ensure_ascii=False)
+            for i, tags in predictions
+        ],
     }).sort_values("text_id")
     SUBMISSION_DIR.mkdir(exist_ok=True)
     path = SUBMISSION_DIR / f"{name}.csv"

@@ -32,6 +32,7 @@ class Config:
     lr: float = 1e-3
     weight_decay: float = 1e-2
     batch_size: int = 128
+    eval_batch_size: int = 64
     epochs: int = 5
     patience: int = 0
     grad_clip: float = 1.0

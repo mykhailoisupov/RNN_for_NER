@@ -255,7 +255,7 @@ class NERDataModule(L.LightningDataModule):
         }
 
     def loader(self, name, shuffle=False):
-        size = self.cfg.batch_size if shuffle else self.cfg.batch_size * 4
+        size = self.cfg.batch_size if shuffle else self.cfg.eval_batch_size
         return DataLoader(NERDataset(self.examples[name]), batch_size=size, shuffle=shuffle, collate_fn=collate)
 
     def train_dataloader(self):

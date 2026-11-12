@@ -5,6 +5,7 @@ description = ""
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "bpemb>=0.3.6",
     "datasketch>=2.0,<3",
     "lightning>=2.6.6",
     "lingua-language-detector>=2,<3",
@@ -15,11 +16,16 @@ dependencies = [
     "pyarrow>=26.0.1",
     "scikit-learn>=1.9.1",
     "seqeval>=1.2.2",
-    "tokenizers>=0.23.3",
+    "tokenizers>=0.22",
     "torch>=2.15.0",
     "torchmetrics>=1.9.0",
     "tqdm>=4.70.1",
     "wandb>=0.31.0",
+]
+
+[project.optional-dependencies]
+flair = [
+    "flair>=0.15",
 ]
 
 [dependency-groups]

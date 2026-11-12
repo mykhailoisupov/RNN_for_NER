@@ -41,6 +41,7 @@ def run(cfg: Config):
         name=name,
         config=dataclasses.asdict(cfg),
         mode=cfg.wandb_mode,
+        log_model="all",
     )
     logger.watch(model.model, log="gradients", log_freq=200)
     logger.experiment.summary.update(data.oracle_f1())
@@ -72,6 +73,9 @@ def run(cfg: Config):
     submission.to_csv(path, index=False)
 
     logger.experiment.summary["best/" + cfg.monitor] = checkpoint.best_model_score.item()
+    csv = wandb.Artifact(f"submission-{logger.version}", type="submission")
+    csv.add_file(str(path))
+    logger.experiment.log_artifact(csv)
     wandb.finish()
     print("submission:", path)
     print("weights:", checkpoint.best_model_path)
@@ -79,7 +83,7 @@ def run(cfg: Config):
         from google.colab import files
 
         files.download(checkpoint.best_model_path)
-    except ImportError:
+    except Exception:
         pass
     return path
 

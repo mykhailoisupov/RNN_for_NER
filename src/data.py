@@ -1,4 +1,5 @@
 import gzip
+import random
 import urllib.request
 from collections import Counter
 from dataclasses import dataclass
@@ -9,8 +10,9 @@ import numpy as np
 import pandas as pd
 import torch
 from torch.nn.utils.rnn import pad_sequence
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, Sampler
 
+from src.augment import add_addresses
 from src.config import DATA_DIR, EMBEDDINGS_DIR, EVAL_SETS, TAGS, Config
 from src.postprocess import hard_processing, to_submission
 from src.text import parse_spans, prepare, tokenize
@@ -83,11 +85,14 @@ def comp_metric(y_true: List[List[str]], y_pred: List[List[str]]):
     return round(f1, 8)
 
 
-def load_splits(train_size, seed):
+def load_splits(train_size, seed, address_share=0.0):
     """train/val: posts from scripts/build_dataset.py; sample/test: raw competition files."""
     train = pd.read_parquet(NORMALIZED_DIR / "train.parquet", columns=["text", "spans"])
     if train_size:
         train = train.sample(min(train_size, len(train)), random_state=seed)
+    if address_share:
+        texts, spans = add_addresses(train["text"].tolist(), train["spans"].tolist(), address_share, seed)
+        train = pd.DataFrame({"text": texts, "spans": spans})
     val = pd.read_parquet(NORMALIZED_DIR / "val.parquet", columns=["text", "spans"])
     sample = pd.read_csv(DATA_DIR / "labeling_sample.csv")
     test = pd.read_csv(DATA_DIR / "test.csv")
@@ -223,6 +228,29 @@ class NERDataset(Dataset):
         return i, torch.tensor(example.ids), torch.tensor(example.labels), words
 
 
+class BucketSampler(Sampler):
+    def __init__(self, lengths, batch_size, shuffle, pool=100):
+        self.lengths = np.asarray(lengths)
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.pool = batch_size * pool if shuffle else len(lengths)
+
+    def __iter__(self):
+        order = np.random.permutation(len(self.lengths)) if self.shuffle else np.arange(len(self.lengths))
+        batches = []
+        for i in range(0, len(order), self.pool):
+            chunk = order[i:i + self.pool]
+            chunk = chunk[np.argsort(self.lengths[chunk], kind="stable")]
+            batches += [chunk[j:j + self.batch_size].tolist() for j in range(0, len(chunk), self.batch_size)]
+        if self.shuffle:
+            random.shuffle(batches)
+        return iter(batches)
+
+    def __len__(self):
+        full, rest = divmod(len(self.lengths), self.pool)
+        return full * -(-self.pool // self.batch_size) + -(-rest // self.batch_size)
+
+
 def collate(batch):
     idx, ids, labels, words = zip(*batch)
     return {
@@ -243,7 +271,7 @@ class NERDataModule(L.LightningDataModule):
     def setup(self, stage=None):
         if self.examples is not None:
             return
-        splits, self.test_ids = load_splits(self.cfg.train_size, self.cfg.seed)
+        splits, self.test_ids = load_splits(self.cfg.train_size, self.cfg.seed, self.cfg.address_share)
         encoder = build_encoder(self.cfg, splits)
         self.vectors = encoder.vectors
         self.examples = {name: encode(rows, encoder) for name, rows in splits.items()}
@@ -255,8 +283,10 @@ class NERDataModule(L.LightningDataModule):
         }
 
     def loader(self, name, shuffle=False):
+        examples = self.examples[name]
         size = self.cfg.batch_size if shuffle else self.cfg.eval_batch_size
-        return DataLoader(NERDataset(self.examples[name]), batch_size=size, shuffle=shuffle, collate_fn=collate)
+        sampler = BucketSampler([len(ex.ids) for ex in examples], size, shuffle)
+        return DataLoader(NERDataset(examples), batch_sampler=sampler, collate_fn=collate)
 
     def train_dataloader(self):
         return self.loader("train", shuffle=True)

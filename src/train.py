@@ -74,6 +74,13 @@ def run(cfg: Config):
     logger.experiment.summary["best/" + cfg.monitor] = checkpoint.best_model_score.item()
     wandb.finish()
     print("submission:", path)
+    print("weights:", checkpoint.best_model_path)
+    try:   # Colab: the browser saves the best checkpoint; locally it stays in models/
+        from google.colab import files
+
+        files.download(checkpoint.best_model_path)
+    except ImportError:
+        pass
     return path
 
 

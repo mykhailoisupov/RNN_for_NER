@@ -11,7 +11,7 @@ from lightning.pytorch.loggers import WandbLogger
 from src.config import MODELS_DIR, SUBMISSION_DIR, WANDB_ENTITY, WANDB_PROJECT, Config
 from src.data import NERDataModule, predicted_locations
 from src.model import Tagger
-from src.postprocess import add_capital
+from src.postprocess import test_policy
 
 NAME_SKIP = {"embedding", "rnn", "bidirectional", "name", "wandb_mode", "accelerator"}
 
@@ -67,7 +67,7 @@ def run(cfg: Config):
     submission = pd.DataFrame({
         "text_id": [data.test_ids[i] for i, _ in predictions],
         "locations": [
-            json.dumps(add_capital(examples[i].text, predicted_locations(examples[i], tags)), ensure_ascii=False)
+            json.dumps(test_policy(examples[i].text, predicted_locations(examples[i], tags)), ensure_ascii=False)
             for i, tags in predictions
         ],
     }).sort_values("text_id")

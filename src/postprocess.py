@@ -15,6 +15,21 @@ COMPOUND_LEFT = re.compile(r"\w*(?:ськ|цьк|зьк|ев|єв|ов|ан)о|�
 QUOTES = {"«": "»", "“": "”", "„": "“"}
 EDGES = re.compile(r"[\W_]*(.*?)[\W_]*", re.S)
 CAPITAL = re.compile(r"(?i)\bстолиц(?:я|і|ю|ею)\b")
+#  One lowercase word is a common noun the model mistook for a name (`общепитах`, `десанте`); val +0.0017, LB +0.004.
+#  Kept: «столиця», glued abbreviations (`просп.Правди`), adjectival regions (`брянської ... областей`).
+REGION_ADJ = re.compile(r"\w+(?:ськ|цьк|зьк)(?:ої|ій|а|ий|ого|ому|ою|ие|ой|ая)")
+#  Street types that mark an address (`площа Ринок, 1` too) / that are added to the left of a street name.
+#  Not added: `площа`, `шосе` (`площа Київської області` is an area), plural `вулиць`.
+STREET = (r"вул\.|ул\.|вулиц(?:я|і|ю|ею)|улиц(?:а|ы|е|у|ей)|проспект(?:і|у|ом|а|е)?|просп\.|пр\.|"
+          r"провул(?:ок|ку|ком)|переул(?:ок|ке|ка)|бульвар(?:і|у|ом|а|е)?|бульв\.|бул\.|узв(?:із|озі|озу|озом)")
+STREET_ANY = re.compile(r"(?:^|\s)(?:" + STREET + r"|площ(?:а|і|у|ею)|пл\.|шосе|алеї|алея|алею)(?:\s|$)", re.I)
+STREET_LEFT = re.compile(r"(?:" + STREET + r")\s*$", re.I)
+#  `, 3` / `, 23а` / `, 69/1` after a street: 1-3 digits, not `50-річний`, not a year, not `5 людей`
+HOUSE = re.compile(r",\s*\d{1,3}(?:[а-яіїєґa-z]|/\d+[а-яіїєґa-z]?)?(?=[\s,.;:)!?]|$)(?!\s*(?:року|рік|р\.|рр|людин|осіб))",
+                   re.I)
+HOUSE_REST = re.compile(r"(?:/\d+)?[а-яіїєґa-z]?(?=[\s,.;:)!?]|$)", re.I)
+#  street-shaped names: after a person (Лукʼяненка) or adjectival (Бориспільська)
+STREET_FORM = re.compile(r"\w+(?:енка|ська|цька|зька|ського|цького|зького)$")
 
 
 def hard_processing(text):
@@ -59,14 +74,54 @@ def to_submission(original_text, offsets, tags):
         for open_, close in QUOTES.items():             # ...but `метро «Лісова»` keeps its closing quote
             if label.count(open_) > label.count(close) and original_text[b:b + 1] == close:
                 label += close
-        if hard_processing(label):                      # an empty string counts as a false positive
-            out[label] = None                           # the metric compares sets
+        if hard_processing(label) and not common_noun(label):   # an empty string counts as a false positive
+            out[label] = None                                     # the metric compares sets
     return list(out)
 
 
-def add_capital(original_text, locations):
-    """Test policy, not the model: test labels «столиця» as a location (LB +0.006), the training sources don't.
+def common_noun(label):
+    return (len(label.split()) == 1 and label[:1].islower()
+            and not (CAPITAL.fullmatch(label) or "." in label or REGION_ADJ.fullmatch(label)))
+
+
+def _occurrences(text, s):
+    return [m.start() for m in re.finditer(re.escape(s), text)]
+
+
+def full_addresses(text, locations):
+    """Test labels addresses with the street type and the house number (`вул. Солом'янська, 28`); the metric drops
+    digits but keeps the comma, so `Лукʼяненка` != `Лукʼяненка, 3`. LB +0.004."""
+    out = []
+    for loc in locations:
+        new = loc
+        for k in _occurrences(text, loc):
+            if any(o != loc and loc in o and any(j <= k < j + len(o) for j in _occurrences(text, o)) for o in locations):
+                continue                                         # this mention is inside a longer answer
+            a, b = k, k + len(loc)
+            left = STREET_LEFT.search(text[max(0, a - 15):a])
+            if left and not STREET_ANY.search(loc):
+                a -= len(left.group())                           # `Мілютенка` -> `вул. Мілютенка`
+            house = HOUSE.match(text, b)
+            street = (left or STREET_ANY.search(loc) or STREET_FORM.search(loc)
+                      or re.search(r"(?:" + STREET + r")\s*" + re.escape(loc), text, re.I)
+                      or (house and re.search(r"[^\d,\s]", house.group()[1:])))
+            if street and house and not re.search(r"\d", loc):
+                b = house.end()                                  # `Лукʼяненка` -> `Лукʼяненка, 3`
+            elif re.search(r",\s*\d+$", loc) and (rest := HOUSE_REST.match(text, b)):
+                b = rest.end()                                   # `Відрадний, 69` -> `Відрадний, 69/1`
+            new = text[a:b]
+            break
+        out.append(new)
+    # `Бориспільська` next to `Бориспільська, 9` and never alone in the text: a cut copy of the address
+    cut = {o for o in out if _occurrences(text, o) and all(
+        any(p.startswith(o + ",") and text.startswith(p, k) for p in out) for k in _occurrences(text, o))}
+    return list(dict.fromkeys(o for o in out if o not in cut))
+
+
+def test_policy(original_text, locations):
+    """How test is labelled where the training sources differ: full addresses, «столиця» is a location (LB +0.006).
     Only for the submission, so val/f1 keeps measuring the model against its own labels."""
+    locations = full_addresses(original_text, locations)
     found = [original_text[m.start():m.end()] for m in CAPITAL.finditer(prepare(original_text))]
     return list(dict.fromkeys(locations + found))
 

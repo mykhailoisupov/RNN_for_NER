@@ -40,6 +40,10 @@ ORG = (r"поліці\w*|нацполіці\w*|поліцейськ\w*|прок�
 PREP = r"(?:у|в|на|по|з|із|зі|до|від|за|під|над|біля|та|і|й)"
 ORG_BEFORE = re.compile(rf"\b(?:{ORG})(?:[ \t\xa0]+(?!{PREP}[ \t\xa0])[\w'ʼ’.-]+){{0,2}}[ \t\xa0]+$", re.I)
 GENITIVE = re.compile(r"\w*[аяиії]")
+#  Test labels a village/station with its type word (`селі Забуччя`, `метро Почайна`): LB +0.0058.
+#  Not `міста Києва`: adding `міст*` cost −0.0047. `с.`/`м.` do not matter, the metric drops one-letter words.
+SETTLEMENT_LEFT = re.compile(r"(?<!\w)(?:сел(?:о|а|і|ом|е)|селищ(?:е|а|і|ем)|смт|пгт|пос[её]л(?:ок|ке|ка|ком)|метро"
+                             r"|станці(?:я|ї|ю|єю)|станци(?:я|и|ю|ей))\s+[«\"]?$", re.I)
 
 
 def hard_processing(text):
@@ -134,15 +138,29 @@ def in_org_name(text, a, b):
     return bool(words) and bool(GENITIVE.fullmatch(words[-1])) and bool(ORG_BEFORE.search(text, max(0, a - 80), a))
 
 
+def settlement_start(text, a):
+    """Start of the mention at `a` with its village/station type word, if there is one. Also used in build_dataset."""
+    m = SETTLEMENT_LEFT.search(text, max(0, a - 20), a)
+    return m.start() if m else a
+
+
 def test_policy(original_text, locations):
     """How test is labelled where the training sources differ: full addresses, «столиця» is a location (LB +0.006),
-    a city/country in an organisation name is not, when every its mention is one (LB +0.0073).
+    a city/country in an organisation name is not, when every its mention is one (LB +0.0073), a village/station
+    keeps its type word (LB +0.0058).
     Only for the submission, so val/f1 keeps measuring the model against its own labels."""
-    locations = full_addresses(original_text, locations)
-    found = [original_text[m.start():m.end()] for m in CAPITAL.finditer(prepare(original_text))]
-    return [loc for loc in dict.fromkeys(locations + found)
-            if not (k := _occurrences(original_text, loc))
-            or not all(in_org_name(original_text, i, i + len(loc)) for i in k)]
+    text = original_text
+    locations = full_addresses(text, locations)
+    found = [text[m.start():m.end()] for m in CAPITAL.finditer(prepare(text))]
+    locations = [loc for loc in dict.fromkeys(locations + found)
+                 if not (k := _occurrences(text, loc)) or not all(in_org_name(text, i, i + len(loc)) for i in k)]
+    return list(dict.fromkeys(m for loc in locations for m in _with_settlement_type(text, loc)))
+
+
+def _with_settlement_type(text, loc):
+    """Every mention of `loc`, with its type word where it has one; not inside a longer word (`Киев` in `Киев-...`)."""
+    whole = [k for k in _occurrences(text, loc) if not re.match(r"[\w-]", text[k + len(loc):k + len(loc) + 1])]
+    return [text[settlement_start(text, k):k + len(loc)] for k in whole] or [loc]
 
 
 if __name__ == "__main__":
@@ -159,6 +177,11 @@ if __name__ == "__main__":
     assert not org("Україна переможе", "Україна")
     assert test_policy("суд Києва, а потім Києва", ["Києва"]) == ["Києва"]   # one mention is outside an org name
     assert test_policy("Поліція Києва", ["Києва"]) == []
+    assert test_policy("у селі Забуччя", ["Забуччя"]) == ["селі Забуччя"]
+    assert test_policy("на метро «Лісова»", ["Лісова»"]) == ["метро «Лісова»"]
+    assert test_policy("гостям міста Києва", ["Києва"]) == ["Києва"]           # city type stays out
+    assert test_policy("Почайна. Метро Почайна", ["Почайна"]) == ["Почайна", "Метро Почайна"]
+    assert test_policy("Киев. станции Киев-Пассажирский", ["Киев"]) == ["Киев"]   # not inside a longer name
     print("ok")
 
 

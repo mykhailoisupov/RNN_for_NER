@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src.postprocess import in_org_name
+from src.postprocess import in_org_name, settlement_start
 from src.text import encode, parse_spans, prepare
 
 DATA = Path(__file__).resolve().parent.parent / "data"
@@ -290,6 +290,18 @@ def profile(posts):
 
 
 # --- build ------------------------------------------------------------------------------
+def _with_settlement_type(text, spans):
+    out = []
+    for a, b in spans:
+        start = settlement_start(text, a)
+        if start < a and not any(c < a and start < d for c, d in spans):   # the type word is free, not in a span
+            STATS["settlement type joined"] += 1
+            a = start
+        out.append((a, b))
+    return out
+
+
+
 def _report(title):
     print(f"\n{title}")
     for key, value in STATS.items():
@@ -312,6 +324,8 @@ def build(rebuild=False, drop_ukraine=False, ru_share=RU_SHARE, seed=0):
         before = sum(map(len, sent.spans))
         sent["spans"] = [[s for s in spans if not in_org_name(t, *s)] for t, spans in zip(sent.text, sent.spans)]
         STATS["LOC in org name removed"] += before - sum(map(len, sent.spans))
+        # Test labels a village/station with its type word (`селі Забуччя`, `метро Почайна`), LB +0.0058.
+        sent["spans"] = [_with_settlement_type(t, spans) for t, spans in zip(sent.text, sent.spans)]
         if drop_ukraine:
             sent["spans"] = [[s for s in spans if not PROBES["Ukraine"].fullmatch(t[s[0]:s[1]])]
                              for t, spans in zip(sent.text, sent.spans)]

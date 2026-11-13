@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from src.postprocess import in_org_name
 from src.text import encode, parse_spans, prepare
 
 DATA = Path(__file__).resolve().parent.parent / "data"
@@ -306,10 +307,16 @@ def build(rebuild=False, drop_ukraine=False, ru_share=RU_SHARE, seed=0):
             _report(f"{lang}: cleaning")
         sent = pd.read_parquet(path)
         sent["spans"] = [[(int(a), int(b)) for a, b in spans] for spans in sent.spans]
-        if drop_ukraine:   # here, not in cleaning, so both label policies share one cache
+        # Label policies here, not in cleaning, so they share one cache.
+        # Test does not label a city/country inside an organisation name (`поліція Києва`), LB +0.0073.
+        before = sum(map(len, sent.spans))
+        sent["spans"] = [[s for s in spans if not in_org_name(t, *s)] for t, spans in zip(sent.text, sent.spans)]
+        STATS["LOC in org name removed"] += before - sum(map(len, sent.spans))
+        if drop_ukraine:
             sent["spans"] = [[s for s in spans if not PROBES["Ukraine"].fullmatch(t[s[0]:s[1]])]
                              for t, spans in zip(sent.text, sent.spans)]
-            sent["labels"] = [len({t[a:b] for a, b in spans}) for t, spans in zip(sent.text, sent.spans)]
+        sent["labels"] = [len({t[a:b] for a, b in spans}) for t, spans in zip(sent.text, sent.spans)]
+        _report(f"{lang}: label policy")
         sentences[lang] = sent
 
     rng = np.random.default_rng(seed)

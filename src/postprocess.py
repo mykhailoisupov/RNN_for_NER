@@ -30,6 +30,16 @@ HOUSE = re.compile(r",\s*\d{1,3}(?:[а-яіїєґa-z]|/\d+[а-яіїєґa-z]?)?(
 HOUSE_REST = re.compile(r"(?:/\d+)?[а-яіїєґa-z]?(?=[\s,.;:)!?]|$)", re.I)
 #  street-shaped names: after a person (Лукʼяненка) or adjectival (Бориспільська)
 STREET_FORM = re.compile(r"\w+(?:енка|ська|цька|зька|ського|цького|зького)$")
+#  Test does not label a city/country inside an organisation or post name (`поліція Києва`, `міністра оборони
+#  України`, `мер Ірпеня`): LB +0.0073. An organisation word, 0-2 words on the same line that are not prepositions,
+#  then a genitive name. `поліція у Києві` and `суд повернув Києву` stay locations.
+ORG = (r"поліці\w*|нацполіці\w*|поліцейськ\w*|прокуратур\w*|прокурор\w*|рад(?:а|и|і|у|ою)|міськрад\w*|облрад\w*|"
+       r"суд(?:у|ом|і|и|ів)?|райсуд\w*|метрополітен\w*|міністр\w*|міністерств\w*|мер(?:а|ом|ії|ія|ію)?|"
+       r"уряд\w*|президент\w*|влад(?:а|и|і|у|ою)|адміністраці\w*|департамент\w*|управлінн\w*|"
+       r"служб(?:а|и|і|у|ою)|фонд\w*|посольств\w*|парламент\w*|СБУ|СБ|ДСНС|ГУНП|ЗСУ")
+PREP = r"(?:у|в|на|по|з|із|зі|до|від|за|під|над|біля|та|і|й)"
+ORG_BEFORE = re.compile(rf"\b(?:{ORG})(?:[ \t\xa0]+(?!{PREP}[ \t\xa0])[\w'ʼ’.-]+){{0,2}}[ \t\xa0]+$", re.I)
+GENITIVE = re.compile(r"\w*[аяиії]")
 
 
 def hard_processing(text):
@@ -118,11 +128,37 @@ def full_addresses(text, locations):
     return list(dict.fromkeys(o for o in out if o not in cut))
 
 
+def in_org_name(text, a, b):
+    """Is the mention text[a:b] part of an organisation or post name? Also relabels train in build_dataset."""
+    words = text[a:b].split()
+    return bool(words) and bool(GENITIVE.fullmatch(words[-1])) and bool(ORG_BEFORE.search(text, max(0, a - 80), a))
+
+
 def test_policy(original_text, locations):
-    """How test is labelled where the training sources differ: full addresses, «столиця» is a location (LB +0.006).
+    """How test is labelled where the training sources differ: full addresses, «столиця» is a location (LB +0.006),
+    a city/country in an organisation name is not, when every its mention is one (LB +0.0073).
     Only for the submission, so val/f1 keeps measuring the model against its own labels."""
     locations = full_addresses(original_text, locations)
     found = [original_text[m.start():m.end()] for m in CAPITAL.finditer(prepare(original_text))]
-    return list(dict.fromkeys(locations + found))
+    return [loc for loc in dict.fromkeys(locations + found)
+            if not (k := _occurrences(original_text, loc))
+            or not all(in_org_name(original_text, i, i + len(loc)) for i in k)]
+
+
+if __name__ == "__main__":
+    def org(text, label):
+        k = text.index(label)
+        return in_org_name(text, k, k + len(label))
+
+    assert org("Патрульна поліція Києва повідомила", "Києва")
+    assert org("заява міністра оборони України", "України")
+    assert org("Рада оборони Києва", "Києва")
+    assert not org("поліція у Києві", "Києві")                    # preposition: a place
+    assert not org("Нацполіція\n\nКиївщина", "Київщина")         # new line: a heading
+    assert not org("Верховний суд повернув Києву", "Києву")      # not genitive
+    assert not org("Україна переможе", "Україна")
+    assert test_policy("суд Києва, а потім Києва", ["Києва"]) == ["Києва"]   # one mention is outside an org name
+    assert test_policy("Поліція Києва", ["Києва"]) == []
+    print("ok")
 
 

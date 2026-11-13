@@ -17,6 +17,8 @@ EDGES = re.compile(r"[\W_]*(.*?)[\W_]*", re.S)
 CAPITAL = re.compile(r"(?i)\bстолиц(?:я|і|ю|ею)\b")
 #  One lowercase word is a common noun, not a name (`общепитах`, `десанте`): LB +0.004 when it was a submission rule.
 #  Kept: «столиця», glued abbreviations (`просп.Правди`), adjectival regions (`брянської ... областей`).
+#  Written in lowercase in Ukrainian media (`москви`, `рф`): train has 20% of them lowercased, so not common nouns.
+LOWERABLE = re.compile(r"Москв(?:а|и|і|у|ою)|Росі(?:я|ї|ю|єю)|РФ")
 REGION_ADJ = re.compile(r"\w+(?:ськ|цьк|зьк)(?:ої|ій|а|ий|ого|ому|ою|ие|ой|ая)")
 #  Street types that mark an address (`площа Ринок, 1` too) / that are added to the left of a street name.
 #  Not added: `площа`, `шосе` (`площа Київської області` is an area), plural `вулиць`.
@@ -92,7 +94,8 @@ def to_submission(original_text, offsets, tags):
 def common_noun(label):
     """One word without a capital letter is not a name (`пляжі`, `вулиць`); `аль-Букамаль` is. Relabels train."""
     return (len(label.split()) == 1 and not any(c.isupper() for c in label)
-            and not (CAPITAL.fullmatch(label) or "." in label or REGION_ADJ.fullmatch(label)))
+            and not (CAPITAL.fullmatch(label) or "." in label or REGION_ADJ.fullmatch(label)
+                     or LOWERABLE.fullmatch(label[:1].upper() + label[1:]) or label == "рф"))
 
 
 def _occurrences(text, s):
@@ -175,6 +178,7 @@ if __name__ == "__main__":
     assert org("сообщила полиция Москвы", "Москвы")
     assert not org("полиция в Москве", "Москве")
     assert not common_noun("аль-Букамаль") and common_noun("пляжі") and not common_noun("столиці")
+    assert not common_noun("москви") and not common_noun("рф") and not common_noun("росії")
     assert trim("у Київ, а", 2, 7) == (2, 6)
     assert trim("метро «Лісова» є", 0, 14) == (0, 14)       # closing quote of an opened one is kept
     assert trim("метро «Лісова» є", 6, 14) == (7, 13)       # edge quotes go

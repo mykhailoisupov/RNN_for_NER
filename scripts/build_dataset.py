@@ -15,8 +15,8 @@ import numpy as np
 import pandas as pd
 
 from src.augment import add_name_lines
-from src.postprocess import (CAPITAL, HOUSE, REGION_ADJ, STREET_ANY, common_noun, in_org_name, settlement_start,
-                             trim)
+from src.postprocess import (CAPITAL, HOUSE, LOWERABLE, REGION_ADJ, STREET_ANY, common_noun, in_org_name,
+                             settlement_start, trim)
 from src.text import encode, parse_spans, prepare
 
 DATA = Path(__file__).resolve().parent.parent / "data"
@@ -26,7 +26,7 @@ RU_SHARE, VAL_RU_SHARE = 0.20, 0.08
 VAL_PCT, VAL_PCT_RARE = 5, 20             # % of uk sentences sent to val: ordinary / with Kyiv or a street
 UPSAMPLE_KYIV, UPSAMPLE_STREET = 4, 4
 HOUSE_NUMBER_P = 0.5
-NAME_LINES_SHARE = 0.1                    # posts with names that get a list/heading of bare names, like test
+NAME_LINES_SHARE = 0.03                   # posts with names that get a list/heading of bare names: ~0.05 a post, as test
 RARE_MIN, RARE_SHARE = 50, 0.03           # a form seen 50+ times and labelled in < 3% of them is not a place
 N_FOLDS = 5
 RU_DOC_MOD = 10                           # keep full rows for every 10th ru document, enough for 20% of train
@@ -189,6 +189,11 @@ def fix_spans(text, loc, org=()):
         STATS[f"{reason} removed"] += len(relabelled) - len(kept)
         relabelled = kept
     spans = clean_spans(text, relabelled)
+    if _crc(text) % 5 == 0:     # `москви`, `рф`: test writes them in lowercase, train never does; 20% of sentences
+        for a, b in spans:
+            if LOWERABLE.fullmatch(text, a, b):
+                text = text[:a] + text[a:b].lower() + text[b:]
+                STATS["LOC lowercased"] += 1
     if spans and encode(text, spans) is None:   # shifted offsets or glued words, not fixable
         STATS["rows dropped: span cuts a word"] += 1
         return None

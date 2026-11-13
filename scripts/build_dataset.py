@@ -1,6 +1,6 @@
 """Build data/normalized/: clean and relabel uk/ru sentences, then glue them into posts shaped like test.
 
-    python -m scripts.build_dataset    # cleaning is cached; --rebuild redoes it
+    python -m scripts.build_dataset    # cleaning and labels are cached; --rebuild redoes them
 
 Run from the project root.
 """
@@ -14,7 +14,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src.postprocess import in_org_name, settlement_start
+from src.augment import add_name_lines
+from src.postprocess import (CAPITAL, HOUSE, REGION_ADJ, STREET_ANY, common_noun, in_org_name, settlement_start,
+                             trim)
 from src.text import encode, parse_spans, prepare
 
 DATA = Path(__file__).resolve().parent.parent / "data"
@@ -24,6 +26,8 @@ RU_SHARE, VAL_RU_SHARE = 0.20, 0.08
 VAL_PCT, VAL_PCT_RARE = 5, 20             # % of uk sentences sent to val: ordinary / with Kyiv or a street
 UPSAMPLE_KYIV, UPSAMPLE_STREET = 4, 4
 HOUSE_NUMBER_P = 0.5
+NAME_LINES_SHARE = 0.1                    # posts with names that get a list/heading of bare names, like test
+RARE_MIN, RARE_SHARE = 50, 0.03           # a form seen 50+ times and labelled in < 3% of them is not a place
 N_FOLDS = 5
 RU_DOC_MOD = 10                           # keep full rows for every 10th ru document, enough for 20% of train
 SEPARATORS, SEPARATOR_P = ["\n\n", "\n", " "], [0.7, 0.2, 0.1]
@@ -46,6 +50,7 @@ PROBES = {
     "Kyiv": re.compile(r"\b(?:Київ|Києва|Києві|Києву|Києвом|Киев|Киева|Киеве|Киеву|Киевом)\b", re.I),
 }
 WORD = re.compile(r"\w+(?:['-]\w+)*")
+FORM = re.compile(r"(?<![\w'’ʼ-])[А-ЯІЇЄҐA-Z][\w'’ʼ]+(?![\w'’ʼ-])")   # one capitalised word
 KYIV_MENTION = re.compile(r"київ|києв|киев", re.I)
 
 
@@ -97,8 +102,38 @@ AREA_AFTER = re.compile(r"\s+(?:район(?:і|у|ом|а|е)?|област(?:�
 ADJECTIVE_END = re.compile(r"(?:ськ|цьк|зьк|ск|цк)\w{1,3}$")   # `Донецької`, not `района` or `Росією`
 
 
+# Test labels a facility with its type word (`Михайлівського собору`, `парку Шевченка`): LB −0.007 without them.
+FACILITY = (r"(?:собор(?:у|і|ом|а|е)?|лавр(?:а|и|і|у|ою|е)|парк(?:у|і|ом|а|е)?|сквер(?:у|і|ом|а|е)?|мост(?:у|і|ом|а|е)?"
+            r"|шляхопров(?:ід|оду|оді|одом)|аеропорт(?:у|і|ом|а|е)?|аэропорт(?:у|ом|а|е)?|ТРЦ|ТЦ|ЖК)(?!\w)")
+NAME_WORD = r"[А-ЯІЇЄҐA-Z][\w'’ʼ]*(?:-[А-ЯІЇЄҐA-Z]?[\w'’ʼ]+)*"
+#  `Михайлівського собору`, `Крымский мост`: a capitalised adjective, then the type
+FACILITY_AFTER = re.compile(rf"{NAME_WORD}(?:ого|ому|ий|ій|ої|ою|им|ім|ый|ая|ой|ую|(?:ськ|цьк|зьк|ов|ев|єв|ин|н)[ау])"
+                            rf"\s+(?:{FACILITY}|міст(?!\w))")   # `міст Вінниця` is `cities`, so only here
+#  `парку Шевченка`, `ТЦ "Аркадія"`: the type, then a quoted name or 1-2 capitalised words
+FACILITY_BEFORE = re.compile(rf"(?<!\w)(?P<type>(?i:{FACILITY}))\s+(?:(?P<quoted>[«\"„“][^»\"”“\n]{{1,40}}[»\"”“])"
+                             rf"|{NAME_WORD}(?:\s+{NAME_WORD})?)")
+
+
+def _facilities(text, spans):
+    out = list(spans)
+    for m in [*FACILITY_AFTER.finditer(text), *FACILITY_BEFORE.finditer(text)]:
+        a, b = m.span()
+        inside = [(c, d) for c, d in out if c < b and a < d]
+        if (a, b) in inside or any(c < a or b < d for c, d in inside):
+            continue                    # labelled whole already, or a span runs past the facility
+        if m.re is FACILITY_AFTER and not inside:
+            continue                    # `Об'єднавчого собору`, `Міжнародний аеропорт`: only extend a labelled name
+        if m.re is FACILITY_BEFORE and not m["quoted"] and (inside or m["type"].lower().startswith("собор")
+                                                            or not re.search(r"[аяиіїу]$", m.group())):
+            continue    # `вокзалі Каїра`: a labelled name is a city; `собору Вселенського`: a council;
+                        # `директор парку Олег Деркач`: a person, the name of a facility is genitive (`парку Шевченка`)
+        out = [s for s in out if s not in inside] + [(a, b)]
+        STATS["facility extended to its type" if inside else "facility labelled"] += 1
+    return out
+
+
 def fix_spans(text, loc, org=()):
-    """Prepared sentence + raw LOC/ORG spans -> (text, spans), or None to drop the row."""
+    """Prepared sentence + raw LOC/ORG spans -> (text, spans) labelled like test, or None to drop the row."""
     assert all(0 <= a < b <= len(text) for a, b in [*loc, *org])
     cut = TCH.search(text) if "TCH" in text else None   # `... - Київ - TCH.` is a site tag, not text
     if cut:
@@ -112,6 +147,14 @@ def fix_spans(text, loc, org=()):
     STATS["rows changed by clean_spans"] += spans != list(loc)
     relabelled = []
     for a, b in spans:
+        if "(" in text[a:b]:                                    # `России (СКР)`: a bracket is never inside a name
+            b = text.index("(", a)
+            STATS["span cut at a bracket"] += 1
+        new = trim(text, a, b)                                  # `Донецьку,` -> `Донецьку`
+        STATS["span edges trimmed"] += new != (a, b)
+        a, b = new
+        if a >= b:
+            continue
         if b < len(text) and text[b - 1].isdigit() and text[b].isdigit():   # `Галицька, 9|3`
             while b < len(text) and text[b].isdigit():
                 b += 1
@@ -120,18 +163,32 @@ def fix_spans(text, loc, org=()):
         if before:
             a = before.start()
             STATS["street type joined"] += 1
+        house = HOUSE.match(text, b)                            # `вул. С. Бандери` -> `вул. С. Бандери, 23`
+        if house and STREET_ANY.search(text[a:b]) and not re.search(r"\d", text[a:b]):
+            b = house.end()
+            STATS["house number joined"] += 1
+        start = settlement_start(text, a)                       # `Забуччя` -> `селі Забуччя`, `метро Почайна`
+        if start < a and not any(c < a and start < d for c, d in spans):
+            a = start
+            STATS["settlement type joined"] += 1
         after = AREA_AFTER.match(text, b) if ADJECTIVE_END.search(text, a, b) else None
         if after:
             b = after.end()
             STATS["area type joined"] += 1
         relabelled.append((a, b))
-    for m in PROBES["Kyiv"].finditer(text):
-        if not any(c < m.end() and m.start() < d for c, d in [*relabelled, *org]):
-            relabelled.append(m.span())
-            STATS["Kyiv labelled"] += 1
-    outside_org = [(a, b) for a, b in relabelled if not any(c <= a and b <= d for c, d in org)]
-    STATS["LOC inside ORG removed"] += len(relabelled) - len(outside_org)
-    spans = clean_spans(text, outside_org)
+    for name, regex in (("Kyiv", PROBES["Kyiv"]), ("столиця", CAPITAL)):   # test labels every mention
+        for m in regex.finditer(text):
+            if not any(c < m.end() and m.start() < d for c, d in [*relabelled, *org]):
+                relabelled.append(m.span())
+                STATS[f"{name} labelled"] += 1
+    relabelled = _facilities(text, relabelled)
+    for reason, drop in (("LOC inside ORG", lambda a, b: any(c <= a and b <= d for c, d in org)),
+                         ("LOC in org name", lambda a, b: in_org_name(text, a, b)),         # `поліція Києва`
+                         ("lowercase common noun", lambda a, b: common_noun(text[a:b]))):   # `пляжі`, `вулиць`
+        kept = [(a, b) for a, b in relabelled if not drop(a, b)]
+        STATS[f"{reason} removed"] += len(relabelled) - len(kept)
+        relabelled = kept
+    spans = clean_spans(text, relabelled)
     if spans and encode(text, spans) is None:   # shifted offsets or glued words, not fixable
         STATS["rows dropped: span cuts a word"] += 1
         return None
@@ -147,11 +204,16 @@ def load_sentences(lang, chunksize=500_000):
     """Clean every row. Copies and label conflicts are judged on the whole corpus, not on the kept part."""
     extra = ["doc_id", "sent_id"] if lang == "ru" else []
     kept, norm_hashes, label_hashes = [], [], []
+    labelled, seen = Counter(), Counter()
     for chunk in pd.read_csv(DATA / f"{lang}_geo_dataset.csv", chunksize=chunksize,
                              usecols=["text", "loc_markers", "org_markers", *extra]):
         STATS["rows in"] += len(chunk)
         rows = [fix_spans(prepare(t), parse_spans(loc), parse_spans(org))
                 for t, loc, org in zip(chunk.text, chunk.loc_markers, chunk.org_markers)]
+        for text, spans in filter(None, rows):
+            forms = list(FORM.finditer(text, 1))      # inside any span counts: `Незалежності` in `майдані Незалежності`
+            seen.update(m.group() for m in forms)
+            labelled.update(m.group() for m in forms if any(a <= m.start() and m.end() <= b for a, b in spans))
         chunk = chunk.loc[[r is not None for r in rows], extra].assign(
             text=[r[0] for r in rows if r], spans=[r[1] for r in rows if r])
         chunk["norm"] = chunk.text.map(normalize_text)
@@ -170,6 +232,13 @@ def load_sentences(lang, chunksize=500_000):
 
     df = pd.concat(kept, ignore_index=True)
     df = df[~df.norm.map(hash).isin(conflicts)].drop_duplicates("norm").reset_index(drop=True)
+    # People, clubs, organisations labelled as places now and then (`Тимошенко`, `Шахтар`, `ООН`): drop the label.
+    rare = {w for w, n in labelled.items()
+            if seen[w] >= RARE_MIN and n < RARE_SHARE * seen[w] and not REGION_ADJ.fullmatch(w)}
+    before = df.spans.map(len).sum()
+    df["spans"] = [[(a, b) for a, b in spans if t[a:b] not in rare] for t, spans in zip(df.text, df.spans)]
+    STATS["rare forms"] = len(rare)
+    STATS["LOC of a rare form removed"] = int(before - df.spans.map(len).sum())
     df = df.join(pd.DataFrame([features(t, s) for t, s in zip(df.text, df.spans)]))
     if lang == "ru":
         key = df.doc_id.map(_crc)
@@ -290,18 +359,6 @@ def profile(posts):
 
 
 # --- build ------------------------------------------------------------------------------
-def _with_settlement_type(text, spans):
-    out = []
-    for a, b in spans:
-        start = settlement_start(text, a)
-        if start < a and not any(c < a and start < d for c, d in spans):   # the type word is free, not in a span
-            STATS["settlement type joined"] += 1
-            a = start
-        out.append((a, b))
-    return out
-
-
-
 def _report(title):
     print(f"\n{title}")
     for key, value in STATS.items():
@@ -309,28 +366,16 @@ def _report(title):
     STATS.clear()
 
 
-def build(rebuild=False, drop_ukraine=False, ru_share=RU_SHARE, seed=0):
+def build(rebuild=False, ru_share=RU_SHARE, seed=0):
     OUT.mkdir(exist_ok=True)
     sentences = {}
-    for lang in ("uk", "ru"):   # stage 1: cleaning, cached because ru takes minutes
+    for lang in ("uk", "ru"):   # stage 1: cleaning and labels, cached because ru takes minutes
         path = OUT / f"{lang}_sentences.parquet"
         if rebuild or not path.exists():
             load_sentences(lang).to_parquet(path)
             _report(f"{lang}: cleaning")
         sent = pd.read_parquet(path)
         sent["spans"] = [[(int(a), int(b)) for a, b in spans] for spans in sent.spans]
-        # Label policies here, not in cleaning, so they share one cache.
-        # Test does not label a city/country inside an organisation name (`поліція Києва`), LB +0.0073.
-        before = sum(map(len, sent.spans))
-        sent["spans"] = [[s for s in spans if not in_org_name(t, *s)] for t, spans in zip(sent.text, sent.spans)]
-        STATS["LOC in org name removed"] += before - sum(map(len, sent.spans))
-        # Test labels a village/station with its type word (`селі Забуччя`, `метро Почайна`), LB +0.0058.
-        sent["spans"] = [_with_settlement_type(t, spans) for t, spans in zip(sent.text, sent.spans)]
-        if drop_ukraine:
-            sent["spans"] = [[s for s in spans if not PROBES["Ukraine"].fullmatch(t[s[0]:s[1]])]
-                             for t, spans in zip(sent.text, sent.spans)]
-        sent["labels"] = [len({t[a:b] for a, b in spans}) for t, spans in zip(sent.text, sent.spans)]
-        _report(f"{lang}: label policy")
         sentences[lang] = sent
 
     rng = np.random.default_rng(seed)
@@ -345,7 +390,10 @@ def build(rebuild=False, drop_ukraine=False, ru_share=RU_SHARE, seed=0):
                 if split == "train" and lang == "uk":
                     group = upsample(group, rng)
                 folds.append(build_posts(group, rng, by_doc=lang == "ru").assign(lang=lang, fold=fold))
-            parts[lang] = pd.concat(folds, ignore_index=True)
+            posts = pd.concat(folds, ignore_index=True)
+            # Test has lists and headings of bare names (`Чорнобиль - 19`); names come from this split only.
+            texts, spans = add_name_lines(posts.text.tolist(), posts.spans.tolist(), NAME_LINES_SHARE, seed)
+            parts[lang] = posts.assign(text=texts, spans=spans)
             _report(f"{split} {lang}: removal of data without names")
         wanted_ru = round(len(parts["uk"]) * share / (1 - share))
         if wanted_ru > len(parts["ru"]):
@@ -376,12 +424,11 @@ def upload():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--rebuild", action="store_true", help="redo the cleaning stage even if cached")
-    parser.add_argument("--drop-ukraine", action="store_true", help="do not label Україна/Украина")
+    parser.add_argument("--rebuild", action="store_true", help="redo cleaning and labels even if cached")
     parser.add_argument("--ru-share", type=float, default=RU_SHARE)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--upload", action="store_true", help="log train/val parquet to W&B for Colab")
     args = parser.parse_args()
-    build(args.rebuild, args.drop_ukraine, args.ru_share, args.seed)
+    build(args.rebuild, args.ru_share, args.seed)
     if args.upload:
         upload()

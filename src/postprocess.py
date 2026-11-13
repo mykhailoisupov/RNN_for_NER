@@ -15,7 +15,7 @@ COMPOUND_LEFT = re.compile(r"\w*(?:ськ|цьк|зьк|ев|єв|ов|ан)о|�
 QUOTES = {"«": "»", "“": "”", "„": "“"}
 EDGES = re.compile(r"[\W_]*(.*?)[\W_]*", re.S)
 CAPITAL = re.compile(r"(?i)\bстолиц(?:я|і|ю|ею)\b")
-#  One lowercase word is a common noun the model mistook for a name (`общепитах`, `десанте`); val +0.0017, LB +0.004.
+#  One lowercase word is a common noun, not a name (`общепитах`, `десанте`): LB +0.004 when it was a submission rule.
 #  Kept: «столиця», glued abbreviations (`просп.Правди`), adjectival regions (`брянської ... областей`).
 REGION_ADJ = re.compile(r"\w+(?:ськ|цьк|зьк)(?:ої|ій|а|ий|ого|ому|ою|ие|ой|ая)")
 #  Street types that mark an address (`площа Ринок, 1` too) / that are added to the left of a street name.
@@ -36,10 +36,13 @@ STREET_FORM = re.compile(r"\w+(?:енка|ська|цька|зька|ськог�
 ORG = (r"поліці\w*|нацполіці\w*|поліцейськ\w*|прокуратур\w*|прокурор\w*|рад(?:а|и|і|у|ою)|міськрад\w*|облрад\w*|"
        r"суд(?:у|ом|і|и|ів)?|райсуд\w*|метрополітен\w*|міністр\w*|міністерств\w*|мер(?:а|ом|ії|ія|ію)?|"
        r"уряд\w*|президент\w*|влад(?:а|и|і|у|ою)|адміністраці\w*|департамент\w*|управлінн\w*|"
-       r"служб(?:а|и|і|у|ою)|фонд\w*|посольств\w*|парламент\w*|СБУ|СБ|ДСНС|ГУНП|ЗСУ")
-PREP = r"(?:у|в|на|по|з|із|зі|до|від|за|під|над|біля|та|і|й)"
+       r"служб(?:а|и|і|у|ою)|фонд\w*|посольств\w*|парламент\w*|СБУ|СБ|ДСНС|ГУНП|ЗСУ|"
+       #  ru: `полиция Москвы`, `мэр Москвы`, `правительства России`
+       r"полици\w*|мэр(?:а|у|ом|ии|ия|ию)?|министр\w*|министерств\w*|правительств\w*|власт(?:ь|и|ей)|"
+       r"администраци\w*|управлени\w*|служб(?:ы|е|ой)|суд(?:а|е|ы|ов)|госдум\w*|ФСБ|МВД|СК")
+PREP = r"(?:у|в|во|на|по|з|із|зі|с|со|из|до|від|от|за|під|под|над|біля|та|і|й|и)"
 ORG_BEFORE = re.compile(rf"\b(?:{ORG})(?:[ \t\xa0]+(?!{PREP}[ \t\xa0])[\w'ʼ’.-]+){{0,2}}[ \t\xa0]+$", re.I)
-GENITIVE = re.compile(r"\w*[аяиії]")
+GENITIVE = re.compile(r"\w*[аяиіїы]")
 #  Test labels a village/station with its type word (`селі Забуччя`, `метро Почайна`): LB +0.0058.
 #  Not `міста Києва`: adding `міст*` cost −0.0047. `с.`/`м.` do not matter, the metric drops one-letter words.
 SETTLEMENT_LEFT = re.compile(r"(?<!\w)(?:сел(?:о|а|і|ом|е)|селищ(?:е|а|і|ем)|смт|пгт|пос[её]л(?:ок|ке|ка|ком)|метро"
@@ -65,36 +68,30 @@ def glue_hyphens(text, offsets, tags):
     return tags
 
 
-def split_brackets(text, offsets, tags):
-    """A round bracket is never inside a name: `Левицького 18а (Курчатова` -> `Левицького 18а` + `Курчатова`."""
-    tags = list(tags)
-    for k, (a, b) in enumerate(offsets):
-        if tags[k] != "O" and text[a:b] in ("(", ")"):
-            tags[k] = "O"
-            if k + 1 < len(tags) and tags[k + 1] == "I":
-                tags[k + 1] = "B"
-    return tags
+def trim(text, a, b):
+    """Span without edge punctuation (the metric scores `Київ,` as a miss), but with the closing quote of a quote
+    it opens (`метро «Лісова»`). Cuts submission strings and train labels alike."""
+    m = EDGES.fullmatch(text, a, b)
+    a, b = m.start(1), m.end(1)
+    for open_, close in QUOTES.items():
+        if text.count(open_, a, b) > text.count(close, a, b) and text[b:b + 1] == close:
+            b += 1
+    return a, b
 
 
 def to_submission(original_text, offsets, tags):
     """`offsets` come from tokenize(prepare(original_text)); the strings come from the original."""
-    prepared = prepare(original_text)
-    tags = split_brackets(prepared, offsets, glue_hyphens(prepared, offsets, tags))
     out = {}
-    for a, b in tags_to_spans(offsets, tags):
-        m = EDGES.fullmatch(original_text, a, b)        # the metric scores `Київ,` as a miss
-        a, b = m.start(1), m.end(1)
-        label = original_text[a:b]
-        for open_, close in QUOTES.items():             # ...but `метро «Лісова»` keeps its closing quote
-            if label.count(open_) > label.count(close) and original_text[b:b + 1] == close:
-                label += close
-        if hard_processing(label) and not common_noun(label):   # an empty string counts as a false positive
-            out[label] = None                                     # the metric compares sets
+    for a, b in tags_to_spans(offsets, glue_hyphens(prepare(original_text), offsets, tags)):
+        label = original_text[slice(*trim(original_text, a, b))]
+        if hard_processing(label):          # an empty string counts as a false positive
+            out[label] = None               # the metric compares sets
     return list(out)
 
 
 def common_noun(label):
-    return (len(label.split()) == 1 and label[:1].islower()
+    """One word without a capital letter is not a name (`пляжі`, `вулиць`); `аль-Букамаль` is. Relabels train."""
+    return (len(label.split()) == 1 and not any(c.isupper() for c in label)
             and not (CAPITAL.fullmatch(label) or "." in label or REGION_ADJ.fullmatch(label)))
 
 
@@ -175,6 +172,12 @@ if __name__ == "__main__":
     assert not org("Нацполіція\n\nКиївщина", "Київщина")         # new line: a heading
     assert not org("Верховний суд повернув Києву", "Києву")      # not genitive
     assert not org("Україна переможе", "Україна")
+    assert org("сообщила полиция Москвы", "Москвы")
+    assert not org("полиция в Москве", "Москве")
+    assert not common_noun("аль-Букамаль") and common_noun("пляжі") and not common_noun("столиці")
+    assert trim("у Київ, а", 2, 7) == (2, 6)
+    assert trim("метро «Лісова» є", 0, 14) == (0, 14)       # closing quote of an opened one is kept
+    assert trim("метро «Лісова» є", 6, 14) == (7, 13)       # edge quotes go
     assert test_policy("суд Києва, а потім Києва", ["Києва"]) == ["Києва"]   # one mention is outside an org name
     assert test_policy("Поліція Києва", ["Києва"]) == []
     assert test_policy("у селі Забуччя", ["Забуччя"]) == ["селі Забуччя"]

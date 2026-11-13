@@ -65,20 +65,21 @@ def run(cfg: Config):
     batches = trainer.predict(model, datamodule=data, ckpt_path="best")
     predictions = [p for batch in batches for p in batch]
     examples = data.examples["test"]
-    submission = pd.DataFrame({
-        "text_id": [data.test_ids[i] for i, _ in predictions],
-        "locations": [
-            json.dumps(test_policy(examples[i].text, predicted_locations(examples[i], tags)), ensure_ascii=False)
-            for i, tags in predictions
-        ],
-    }).sort_values("text_id")
+    raw = [predicted_locations(examples[i], tags) for i, tags in predictions]
     SUBMISSION_DIR.mkdir(exist_ok=True)
     path = SUBMISSION_DIR / f"{name}.csv"
-    submission.to_csv(path, index=False)
+    # `_raw`: without test_policy, to see which submission rules the relabelled train has made redundant
+    for out, locations in ((path, [test_policy(examples[i].text, r) for (i, _), r in zip(predictions, raw)]),
+                           (SUBMISSION_DIR / f"{name}_raw.csv", raw)):
+        pd.DataFrame({
+            "text_id": [data.test_ids[i] for i, _ in predictions],
+            "locations": [json.dumps(r, ensure_ascii=False) for r in locations],
+        }).sort_values("text_id").to_csv(out, index=False)
 
     logger.experiment.summary["best/" + cfg.monitor] = checkpoint.best_model_score.item()
     csv = wandb.Artifact(f"submission-{logger.version}", type="submission")
     csv.add_file(str(path))
+    csv.add_file(str(SUBMISSION_DIR / f"{name}_raw.csv"))
     logger.experiment.log_artifact(csv)
     wandb.finish()
     print("submission:", path)

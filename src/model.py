@@ -191,13 +191,17 @@ class FlairEmbedder(nn.Module):
         fwd = self.forward_lm.get_representation(texts, "\n", " ")
         bwd = self.backward_lm.get_representation(texts, "\n", " ")
 
-        out = torch.zeros(len(words), batch["ids"].size(1), self.output_dim, device=fwd.device)
+        rows, cols, f, b = [], [], [], []
         for i, sentence in enumerate(words):
             start = 0
             for j, word in enumerate(sentence):
                 end = start + len(word)
-                f = end + 1
-                b = len(texts[i]) + 1 - start
-                out[i, j] = torch.cat([fwd[f, i], bwd[b, i]])
+                rows.append(i)
+                cols.append(j)
+                f.append(end + 1)
+                b.append(len(texts[i]) + 1 - start)
                 start = end + 1
+        rows, cols, f, b = (torch.tensor(x, device=fwd.device) for x in (rows, cols, f, b))
+        out = torch.zeros(len(words), batch["ids"].size(1), self.output_dim, device=fwd.device, dtype=fwd.dtype)
+        out[rows, cols] = torch.cat([fwd[f, rows], bwd[b, rows]], dim=-1)
         return out

@@ -20,6 +20,7 @@ class Config:
     embedding: str = "fasttext"
     bpe_vocab_size: int = 50000
     train_size: int = 200_000
+    address_share: float = 0.0
     min_freq: int = 2
     freeze_embeddings: bool = True
     rnn: str = "lstm"
@@ -32,6 +33,7 @@ class Config:
     lr: float = 1e-3
     weight_decay: float = 1e-2
     batch_size: int = 128
+    eval_batch_size: int = 64
     epochs: int = 5
     patience: int = 0
     grad_clip: float = 1.0

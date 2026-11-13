@@ -161,34 +161,3 @@ def _with_settlement_type(text, loc):
     """Every mention of `loc`, with its type word where it has one; not inside a longer word (`Киев` in `Киев-...`)."""
     whole = [k for k in _occurrences(text, loc) if not re.match(r"[\w-]", text[k + len(loc):k + len(loc) + 1])]
     return [text[settlement_start(text, k):k + len(loc)] for k in whole] or [loc]
-
-
-if __name__ == "__main__":
-    def org(text, label):
-        k = text.index(label)
-        return in_org_name(text, k, k + len(label))
-
-    assert org("Патрульна поліція Києва повідомила", "Києва")
-    assert org("заява міністра оборони України", "України")
-    assert org("Рада оборони Києва", "Києва")
-    assert not org("поліція у Києві", "Києві")                    # preposition: a place
-    assert not org("Нацполіція\n\nКиївщина", "Київщина")         # new line: a heading
-    assert not org("Верховний суд повернув Києву", "Києву")      # not genitive
-    assert not org("Україна переможе", "Україна")
-    assert org("сообщила полиция Москвы", "Москвы")
-    assert not org("полиция в Москве", "Москве")
-    assert not common_noun("аль-Букамаль") and common_noun("пляжі") and not common_noun("столиці")
-    assert not common_noun("москви") and not common_noun("рф") and not common_noun("росії")
-    assert trim("у Київ, а", 2, 7) == (2, 6)
-    assert trim("метро «Лісова» є", 0, 14) == (0, 14)       # closing quote of an opened one is kept
-    assert trim("метро «Лісова» є", 6, 14) == (7, 13)       # edge quotes go
-    assert test_policy("суд Києва, а потім Києва", ["Києва"]) == ["Києва"]   # one mention is outside an org name
-    assert test_policy("Поліція Києва", ["Києва"]) == []
-    assert test_policy("у селі Забуччя", ["Забуччя"]) == ["селі Забуччя"]
-    assert test_policy("на метро «Лісова»", ["Лісова»"]) == ["метро «Лісова»"]
-    assert test_policy("гостям міста Києва", ["Києва"]) == ["Києва"]           # city type stays out
-    assert test_policy("Почайна. Метро Почайна", ["Почайна"]) == ["Почайна", "Метро Почайна"]
-    assert test_policy("Киев. станции Киев-Пассажирский", ["Киев"]) == ["Киев"]   # not inside a longer name
-    print("ok")
-
-

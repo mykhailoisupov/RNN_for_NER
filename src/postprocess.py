@@ -78,6 +78,8 @@ def trim(text, a, b):
     for open_, close in QUOTES.items():
         if text.count(open_, a, b) > text.count(close, a, b) and text[b:b + 1] == close:
             b += 1
+    if text.count('"', a, b) % 2 and text[b:b + 1] == '"':   # a straight quote opens and closes alike: `ТЦ "Ocean Plaza"`
+        b += 1
     return a, b
 
 

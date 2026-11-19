@@ -7,16 +7,23 @@ Chosen on val F1; sample is a check. Writes merge-best.csv and merge-rampart.csv
 import argparse
 import itertools
 
+import numpy as np
 import pandas as pd
 
 from src.config import SUBMISSION_DIR
 from src.data import post_counts, predicted_locations, prf
-from src.ensemble import (argmax_tags, average, bootstrap_delta, decode, eval_examples, load_probs, merge_adjacent,
+from src.ensemble import (argmax_tags, average, decode, eval_examples, load_probs, merge_adjacent,
                           strict, write_submission)
 from src.postprocess import test_policy
 from src.rampart import EXTEND_SCORE, MIN_SCORE, rampart_tags
 
 BASE = "viterbi"
+
+
+def bootstrap_delta(base, new, n=1000, seed=0):
+    """95% interval of F1(new) - F1(base) over posts resampled together (a paired bootstrap)."""
+    idx = np.random.default_rng(seed).integers(0, len(base), (n, len(base)))
+    return np.quantile(prf(new[idx].sum(1))[2] - prf(base[idx].sum(1))[2], [0.025, 0.975])
 
 
 def rampart(decoded, **kw):

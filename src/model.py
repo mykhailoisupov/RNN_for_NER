@@ -136,8 +136,8 @@ class Tagger(L.LightningModule):
 
     def on_validation_epoch_end(self):
         for name, predictions in self.outputs.items():
-            f1 = score(self.trainer.datamodule.examples[name], predictions)
-            self.log(f"{name}/f1", f1, prog_bar=True)
+            for metric, value in score(self.trainer.datamodule.examples[name], predictions).items():
+                self.log(f"{name}/{metric}", value, prog_bar=metric == "f1")
 
     def predict_step(self, batch, batch_idx):
         return self.predictions(self(batch), batch)

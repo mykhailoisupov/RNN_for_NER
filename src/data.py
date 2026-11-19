@@ -82,7 +82,7 @@ def comp_metric(y_true: List[List[str]], y_pred: List[List[str]]):
         f1 = 0
     else:
         f1 = 2 * precision * recall / (precision + recall)
-    return round(f1, 8)
+    return round(precision, 8), round(recall, 8), round(f1, 8)
 
 
 def load_splits(train_size, seed, address_share=0.0):
@@ -218,7 +218,7 @@ def predicted_locations(example, piece_tags, guards=False):
 def score(examples, predictions):
     y_true = [examples[i].locations for i, _ in predictions]
     y_pred = [predicted_locations(examples[i], tags) for i, tags in predictions]
-    return comp_metric(y_true, y_pred)
+    return dict(zip(("precision", "recall", "f1"), comp_metric(y_true, y_pred)))
 
 
 class NERDataset(Dataset):
@@ -284,7 +284,7 @@ class NERDataModule(L.LightningDataModule):
 
     def oracle_f1(self):
         return {
-            f"{name}/oracle_f1": score(self.examples[name], [(i, ex.labels) for i, ex in enumerate(self.examples[name])])
+            f"{name}/oracle_f1": score(self.examples[name], [(i, ex.labels) for i, ex in enumerate(self.examples[name])])["f1"]
             for name in EVAL_SETS
         }
 

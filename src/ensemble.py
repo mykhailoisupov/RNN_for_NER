@@ -7,7 +7,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from src.config import SUBMISSION_DIR
-from src.data import BucketSampler, NERDataset, WordEncoder, collate, comp_metric, encode, load_splits, predicted_locations
+from src.data import BucketSampler, NERDataset, WordEncoder, collate, encode, load_splits, post_counts, predicted_locations, prf
 from src.model import viterbi
 from src.postprocess import hard_processing, test_policy
 from src.rampart import rampart_tags
@@ -97,24 +97,10 @@ def write_submission(path, test_ids, locations):
     }).sort_values("text_id").to_csv(path, index=False)
 
 
-def post_counts(y_true, y_pred):
-    """tp, fp, fn of every post, counted as comp_metric counts them."""
-    rows = []
-    for t, p in zip(y_true, y_pred):
-        t, p = {hard_processing(s) for s in t}, {hard_processing(s) for s in p}
-        rows.append((len(t & p), len(p - t), len(t - p)))
-    return np.array(rows)
-
-
-def f1(counts):
-    tp, fp, fn = counts[..., 0], counts[..., 1], counts[..., 2]
-    return 2 * tp / np.maximum(2 * tp + fp + fn, 1)
-
-
 def bootstrap_delta(base, new, n=1000, seed=0):
     """95% interval of F1(new) - F1(base) over posts resampled together (a paired bootstrap)."""
     idx = np.random.default_rng(seed).integers(0, len(base), (n, len(base)))
-    return np.quantile(f1(new[idx].sum(1)) - f1(base[idx].sum(1)), [0.025, 0.975])
+    return np.quantile(prf(new[idx].sum(1))[2] - prf(base[idx].sum(1))[2], [0.025, 0.975])
 
 
 def run(paths, weights, name, o_weights=(1.0,), rampart=False):
@@ -135,10 +121,10 @@ def run(paths, weights, name, o_weights=(1.0,), rampart=False):
     for o_weight in sorted({*o_weights, 1.0}):
         row = {"o_weight": o_weight}
         for split in ("val", "sample"):
-            gold, pred = [ex.locations for ex in examples[split]], locations(split, o_weight)
-            row.update(zip((f"{split}_p", f"{split}_r", f"{split}_f1"), comp_metric(gold, pred)))
+            c = post_counts([ex.locations for ex in examples[split]], locations(split, o_weight))
+            row.update(zip((f"{split}_p", f"{split}_r", f"{split}_f1"), map(float, prf(c.sum(0)))))
             if split == "val":
-                counts[o_weight] = post_counts(gold, pred)
+                counts[o_weight] = c
         grid.append(row)
     grid = pd.DataFrame(grid)
     SUBMISSION_DIR.mkdir(exist_ok=True)
@@ -149,7 +135,7 @@ def run(paths, weights, name, o_weights=(1.0,), rampart=False):
     low, high = bootstrap_delta(counts[1.0], counts[best])
     raw, base = locations("test", best), locations("test", 1.0)
     changed = sum(set(a) != set(b) for a, b in zip(raw, base))
-    print(f"best o_weight {best}: val F1 {f1(counts[1.0].sum(0)):.4f} -> {f1(counts[best].sum(0)):.4f}, "
+    print(f"best o_weight {best}: val F1 {prf(counts[1.0].sum(0))[2]:.4f} -> {prf(counts[best].sum(0))[2]:.4f}, "
           f"delta 95% CI [{low:+.4f}, {high:+.4f}]; test posts changed: {changed} of {len(raw)}")
     policy = [test_policy(ex.text, r) for ex, r in zip(examples["test"], raw)]
     for suffix, rows in (("", policy), ("_raw", raw)):

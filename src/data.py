@@ -49,40 +49,28 @@ def spans_to_tags(words, spans):
     return tags
 
 
-def comp_metric(y_true: List[List[str]], y_pred: List[List[str]]):
+def post_counts(y_true, y_pred):
+    """tp, fp, fn of every post over sets of hard_processing'ed strings; shape (posts, 3)."""
     assert len(y_true) == len(y_pred)
-    tp, fp, fn, p,  = 0.0, 0.0, 0.0, 0.0
+    rows = []
+    for t, p in zip(y_true, y_pred):
+        t, p = {hard_processing(s) for s in t}, {hard_processing(s) for s in p}
+        rows.append((len(t & p), len(p - t), len(t - p)))
+    return np.array(rows, dtype=float).reshape(-1, 3)
 
-    for y_true_sample, y_pred_sample in zip(y_true, y_pred):
-        y_true_sample = set([hard_processing(s) for s in y_true_sample])
-        y_pred_sample = set([hard_processing(s) for s in y_pred_sample])
 
-        tp += len(y_true_sample & y_pred_sample)
-        fp += len(y_pred_sample - y_true_sample)
-        fn += len(y_true_sample - y_pred_sample)
-        p += len(y_true_sample)
+def prf(counts):
+    """Precision, recall, F1 of summed tp/fp/fn, shape (..., 3). Competition edge cases:
+    nothing predicted -> precision 1 if nothing is gold else 0; nothing gold -> recall 1."""
+    tp, fp, fn = np.moveaxis(counts, -1, 0)
+    precision = (tp + (tp + fp == 0) * (fn == 0)) / np.maximum(tp + fp, 1)
+    recall = (tp + (tp + fn == 0)) / np.maximum(tp + fn, 1)
+    return precision, recall, 2 * precision * recall / np.maximum(precision + recall, 1e-12)
 
-    if tp + fp == 0:
-        if p == 0:
-            precision = 1.0
-        else:
-            precision = 0.0
-    else:
-        precision = tp/(tp + fp)
 
-    if tp + fn == 0:
-        if p == 0:
-            recall = 1.0
-        else:
-            recall = 0.0
-    else:
-        recall = tp/(tp + fn)
-
-    if precision + recall == 0:
-        f1 = 0
-    else:
-        f1 = 2 * precision * recall / (precision + recall)
-    return round(precision, 8), round(recall, 8), round(f1, 8)
+def comp_metric(y_true: List[List[str]], y_pred: List[List[str]]):
+    """The competition metric: micro P/R/F1 over all posts."""
+    return tuple(round(float(x), 8) for x in prf(post_counts(y_true, y_pred).sum(0)))
 
 
 def load_splits(train_size, seed, address_share=0.0):

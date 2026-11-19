@@ -10,9 +10,9 @@ import itertools
 import pandas as pd
 
 from src.config import SUBMISSION_DIR
-from src.data import comp_metric, predicted_locations
-from src.ensemble import (argmax_tags, average, bootstrap_delta, decode, eval_examples, f1, load_probs, merge_adjacent,
-                          post_counts, strict, write_submission)
+from src.data import post_counts, predicted_locations, prf
+from src.ensemble import (argmax_tags, average, bootstrap_delta, decode, eval_examples, load_probs, merge_adjacent,
+                          strict, write_submission)
 from src.postprocess import test_policy
 from src.rampart import EXTEND_SCORE, MIN_SCORE, rampart_tags
 
@@ -65,10 +65,10 @@ def main(paths, name):
     def score(label, config, rows, counts):
         row = {"config": label}
         for split in ("val", "sample"):
-            gold, pred = [ex.locations for ex in examples[split]], locations(split, config)
-            row.update(zip((f"{split}_p", f"{split}_r", f"{split}_f1"), comp_metric(gold, pred)))
+            c = post_counts([ex.locations for ex in examples[split]], locations(split, config))
+            row.update(zip((f"{split}_p", f"{split}_r", f"{split}_f1"), map(float, prf(c.sum(0)))))
             if split == "val":
-                counts[label] = post_counts(gold, pred)
+                counts[label] = c
         rows.append(row)
         print(" | ".join(f"{v:.4f}" if isinstance(v, float) else v for v in row.values()), flush=True)
 
@@ -93,7 +93,7 @@ def main(paths, name):
         low, high = bootstrap_delta(counts[BASE], counts[label])
         raw = locations("test", grid[label])
         changed = sum(set(a) != set(b) for a, b in zip(raw, base_test))
-        print(f"{tag}: {label}  val F1 {f1(counts[BASE].sum(0)):.4f} -> {f1(counts[label].sum(0)):.4f}, "
+        print(f"{tag}: {label}  val F1 {prf(counts[BASE].sum(0))[2]:.4f} -> {prf(counts[label].sum(0))[2]:.4f}, "
               f"delta 95% CI [{low:+.4f}, {high:+.4f}]; test posts changed: {changed} of {len(raw)}")
         policy = [test_policy(ex.text, r) for ex, r in zip(examples["test"], raw)]
         for suffix, locs in (("", policy), ("_raw", raw)):

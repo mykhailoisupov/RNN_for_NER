@@ -209,10 +209,10 @@ def encode(rows, encoder):
     return examples
 
 
-def predicted_locations(example, piece_tags, guards=False):
+def predicted_locations(example, piece_tags, guards=False, glue=True):
     tags = [TAGS[piece_tags[i]][0] for i in example.word_starts]   # B-LOC -> B, as src.text expects
     offsets = [(start, end) for _, start, end in example.words]
-    return to_submission(example.text, offsets, tags, guards)
+    return to_submission(example.text, offsets, tags, guards, glue)
 
 
 def score(examples, predictions):

@@ -92,10 +92,11 @@ def split_brackets(text, offsets, tags):
     return tags
 
 
-def to_submission(original_text, offsets, tags, guards=False):
+def to_submission(original_text, offsets, tags, guards=False, glue=True):
     """`offsets` come from tokenize(prepare(original_text)); the strings come from the original."""
     prepared = prepare(original_text)
-    tags = glue_hyphens(prepared, offsets, tags)
+    if glue:
+        tags = glue_hyphens(prepared, offsets, tags)
     if guards:
         tags = split_brackets(prepared, offsets, tags)
     out = {}

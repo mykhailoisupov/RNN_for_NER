@@ -1,13 +1,51 @@
-"""Label form, boundaries and annotation policy of the sources, sample and GPT-labelled test."""
+"""Label form, boundaries and annotation policy of the sources, sample and regex-labelled test."""
 import re
 from collections import Counter
 
 import numpy as np
 import pandas as pd
 
-from scripts.build_dataset import PROBES, STREET
+from scripts.build_dataset import NAME_WORD, PROBES, STATS, STREET, fix_spans
+from src.text import prepare
 
 from .test_vs_sources import comparison_text, words
+
+# Chosen on a grid (min 2/3/5/10, share 0/.3/.5/.7, ru forms, generic patterns): F1 sample 0.716 / uk val 0.842.
+LEXICON_MIN, LEXICON_SHARE, LEXICON_SCAN = 2, 0.5, 300_000
+EDGE = r"(?<![\w'’ʼ-])", r"(?![\w'’ʼ-])"
+STREET_NAME = re.compile(rf"(?<!\w)(?i:{STREET})\s*{NAME_WORD}(?:\s+{NAME_WORD})?")   # `вул. Хрещатик`
+SETTLEMENT_NAME = re.compile(rf"(?<!\w)(?i:сел(?:о|а|і|ом|е)|селищ(?:е|а|і|ем)|смт|метро|станці(?:я|ї|ю|єю))"
+                             rf"\s+[«\"]?({NAME_WORD})")                                # `селі Забуччя`
+
+
+def regex_labeller(sent):
+    """Labelled sentences (text, spans) -> text -> LOC spans, for test, which has no labels.
+
+    Capitalised forms labelled LEXICON_MIN+ times and in LEXICON_SHARE+ of their occurrences (counted on the first
+    LEXICON_SCAN sentences), found by one regex, plus street and settlement patterns; then fix_spans, as for train.
+    """
+    counts = Counter(t[a:b] for t, spans in zip(sent.text, sent.spans) for a, b in spans)
+    names = {n for n, c in counts.items() if c >= LEXICON_MIN and n[:1].isupper()}
+
+    def compile_names(names):
+        return re.compile(rf"{EDGE[0]}(?:{'|'.join(map(re.escape, sorted(names, key=len, reverse=True)))}){EDGE[1]}")
+
+    seen, hit = Counter(), Counter()
+    rx = compile_names(names)
+    for t, spans in zip(sent.text[:LEXICON_SCAN], sent.spans[:LEXICON_SCAN]):
+        for m in rx.finditer(t):
+            seen[m.group()] += 1
+            hit[m.group()] += any(a <= m.start() and m.end() <= b for a, b in spans)
+    rx = compile_names(n for n in names if hit[n] >= LEXICON_SHARE * seen[n])   # `Шахтар`, `Тимошенко` drop out
+
+    def label(text):
+        text = prepare(text)
+        spans = [m.span() for m in rx.finditer(text)]
+        spans += [m.span() for m in STREET_NAME.finditer(text)] + [m.span(1) for m in SETTLEMENT_NAME.finditer(text)]
+        out = fix_spans(text, spans)
+        STATS.clear()
+        return out[1] if out else []
+    return label
 
 
 AREA = r"(?:район\w*|област\w*|республ[іи]к\w*)"
@@ -110,15 +148,15 @@ def type_profile(counts):
                          for k in [*patterns, "no_pattern_match"]])
 
 
-def context_probes(rows, *, org_available, prediction_mode=False):
-    """rows yields (text, LOC spans, ORG spans, unresolved prediction spans)."""
+def context_probes(rows, *, org_available):
+    """rows yields (text, LOC spans, ORG spans)."""
     summary = Counter(rows=0, LOC_spans=0, LOC_inside_ORG=0,
                       LOC_crossing_ORG=0, labels_in_footer=0,
                       LOC_ending_inside_number=0)
     mentions = {name: Counter() for name in PROBES}
     examples = []
     example_counts = Counter()
-    for text, locs, orgs, unresolved in rows:
+    for text, locs, orgs in rows:
         summary["rows"] += 1
         # Preserve offsets while preventing the literal 'n' in '\n' joining words.
         search_text = text.replace("\\n", " \n")
@@ -146,13 +184,11 @@ def context_probes(rows, *, org_available, prediction_mode=False):
                 counts = mentions[name]
                 counts["occurrences"] += 1
                 selected = any(c <= a and b <= d for c, d in locs)
-                ambiguous = any(c <= a and b <= d for c, d in unresolved)
                 in_org = any(c <= a and b <= d for c, d in orgs)
-                status = "LOC" if selected else "unresolved_GPT_occurrence" if ambiguous else "inside_ORG_only" if in_org else "not_LOC"
+                status = "LOC" if selected else "inside_ORG_only" if in_org else "not_LOC"
                 counts[status] += 1
                 if status != "LOC" and example_counts[(name,status)] < 2:
                     examples.append({"kind": name + ":" + status, "LOC": match.group(), "context": text[max(0,a-50):a] + "[" + match.group() + "]" + text[b:b+50]})
                     example_counts[(name,status)] += 1
     summary["ORG_available"] = org_available
-    summary["prediction_mode"] = prediction_mode
     return dict(summary), pd.DataFrame([{"name": k, **v} for k,v in mentions.items()]), pd.DataFrame(examples)

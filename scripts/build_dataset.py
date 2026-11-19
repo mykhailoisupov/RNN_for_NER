@@ -32,7 +32,7 @@ N_FOLDS = 5
 RU_DOC_MOD = 10                           # keep full rows for every 10th ru document, enough for 20% of train
 SEPARATORS, SEPARATOR_P = ["\n\n", "\n", " "], [0.7, 0.2, 0.1]
 
-# Shares of test posts, measured on GPT labels of test.
+# Target shares of test posts.
 BIN_NAMES = ["0-15", "16-30", "31-60", "61-120", "121+"]
 BIN_LOW, BIN_HIGH = np.array([1, 16, 31, 61, 121]), np.array([15, 30, 60, 120, 250])
 TARGET_WORDS = np.array([0.220, 0.239, 0.245, 0.201, 0.094])

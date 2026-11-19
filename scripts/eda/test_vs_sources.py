@@ -215,22 +215,14 @@ def sentence_ranges(text):
     if words(text[start:]): yield start, len(text)
 
 
-def pseudo_sentences(predictions):
+def pseudo_sentences(posts):
+    """posts: text, key, spans -> one row per sentence with the labels inside it."""
     rows = []
-    for row in predictions.itertuples():
-        spans = {s: [(m.start(), m.end()) for m in re.finditer(re.escape(s), row.text)] for s in row.locations}
+    for row in posts.itertuples():
         for number, (a, b) in enumerate(sentence_ranges(row.text)):
-            definite, possible = [], []
-            for s, hits in spans.items():
-                overlapping = [(c, d) for c, d in hits if c < b and a < d]
-                if len(hits) == 1 and overlapping and a <= hits[0][0] and hits[0][1] <= b:
-                    definite.append(s)
-                elif overlapping:
-                    possible.append(s)
             text = row.text[a:b]
-            record = feature_row(text, definite)
-            record.update(post_key=row.key, sentence=number, text=text, start=a, end=b,
-                          labels_upper=len(set(definite + possible)), uncertain=bool(possible))
+            record = feature_row(text, (row.text[c:d] for c, d in row.spans if a <= c and d <= b))
+            record.update(post_key=row.key, sentence=number, text=text, start=a, end=b)
             rows.append(record)
     return pd.DataFrame(rows)
 

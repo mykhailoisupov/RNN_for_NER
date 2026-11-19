@@ -10,6 +10,7 @@ from src.config import SUBMISSION_DIR
 from src.data import BucketSampler, NERDataset, WordEncoder, collate, comp_metric, encode, load_splits, predicted_locations
 from src.model import viterbi
 from src.postprocess import hard_processing, test_policy
+from src.rampart import rampart_tags
 
 SPLITS = ("val", "sample", "test")
 
@@ -23,8 +24,8 @@ def device():
 
 
 @torch.no_grad()
-def word_probs(model, examples, batch_size):
-    model.eval().to(device())
+def word_probs(model, examples, batch_size, on=None):
+    model.eval().to(on or device())
     sampler = BucketSampler([len(ex.ids) for ex in examples], batch_size, shuffle=False)
     probs = [None] * len(examples)
     for batch in DataLoader(NERDataset(examples), batch_sampler=sampler, collate_fn=collate):
@@ -116,7 +117,7 @@ def bootstrap_delta(base, new, n=1000, seed=0):
     return np.quantile(f1(new[idx].sum(1)) - f1(base[idx].sum(1)), [0.025, 0.975])
 
 
-def run(paths, weights, name, o_weights=(1.0,)):
+def run(paths, weights, name, o_weights=(1.0,), rampart=False):
     members = [load_probs(p) for p in paths]
     examples, test_ids = eval_examples()
     probs = {split: average(members, weights, split) for split in SPLITS if all(split in m for m in members)}
@@ -124,7 +125,11 @@ def run(paths, weights, name, o_weights=(1.0,)):
         assert [len(r) for r in rows] == [len(ex.word_starts) for ex in examples[split]], f"{split}: probs do not match local data"
 
     def locations(split, o_weight):
-        return [predicted_locations(ex, t, guards=True) for ex, t in zip(examples[split], decode(probs[split], o_weight))]
+        tags = decode(probs[split], o_weight)
+        if rampart:   # rampart's span repair on the Viterbi tags: neighbours joined by a space or hyphen become one name
+            tags = [rampart_tags(ex.text, [(a, b) for _, a, b in ex.words], p, t)
+                    for ex, p, t in zip(examples[split], probs[split], tags)]
+        return [predicted_locations(ex, t, guards=True) for ex, t in zip(examples[split], tags)]
 
     grid, counts = [], {}
     for o_weight in sorted({*o_weights, 1.0}):
@@ -160,5 +165,6 @@ if __name__ == "__main__":
     parser.add_argument("--name", required=True)
     parser.add_argument("--o-weights", type=float, nargs="+", default=[1.0],
                         help="grid for the O-class threshold, best val F1 wins; 1 is plain Viterbi")
+    parser.add_argument("--rampart", action="store_true", help="rampart span repair after Viterbi (LB 0.64739 -> 0.66180)")
     args = parser.parse_args()
-    run(args.probs, args.weights or [1.0] * len(args.probs), args.name, args.o_weights)
+    run(args.probs, args.weights or [1.0] * len(args.probs), args.name, args.o_weights, args.rampart)

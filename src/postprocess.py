@@ -15,7 +15,7 @@ COMPOUND_LEFT = re.compile(r"\w*(?:ськ|цьк|зьк|ев|єв|ов|ан)о|�
 QUOTES = {"«": "»", "“": "”", "„": "“"}
 EDGES = re.compile(r"[\W_]*(.*?)[\W_]*", re.S)
 CAPITAL = re.compile(r"(?i)\bстолиц(?:я|і|ю|ею)\b")
-#  One lowercase word is a common noun, not a name (`общепитах`, `десанте`): LB +0.004 when it was a submission rule.
+#  One lowercase word is a common noun, not a name (`общепитах`, `десанте`): LB +0.004 as a submission rule.
 #  Kept: «столиця», glued abbreviations (`просп.Правди`), adjectival regions (`брянської ... областей`).
 #  Written in lowercase in Ukrainian media (`москви`, `рф`): train has 20% of them lowercased, so not common nouns.
 LOWERABLE = re.compile(r"Москв(?:а|и|і|у|ою)|Росі(?:я|ї|ю|єю)|РФ")
@@ -81,12 +81,27 @@ def trim(text, a, b):
     return a, b
 
 
-def to_submission(original_text, offsets, tags):
+def split_brackets(text, offsets, tags):
+    """A round bracket is never inside a name: `Левицького 18а (Курчатова` -> `Левицького 18а` + `Курчатова`."""
+    tags = list(tags)
+    for k, (a, b) in enumerate(offsets):
+        if tags[k] != "O" and text[a:b] in ("(", ")"):
+            tags[k] = "O"
+            if k + 1 < len(tags) and tags[k + 1] == "I":
+                tags[k + 1] = "B"
+    return tags
+
+
+def to_submission(original_text, offsets, tags, guards=False):
     """`offsets` come from tokenize(prepare(original_text)); the strings come from the original."""
+    prepared = prepare(original_text)
+    tags = glue_hyphens(prepared, offsets, tags)
+    if guards:
+        tags = split_brackets(prepared, offsets, tags)
     out = {}
-    for a, b in tags_to_spans(offsets, glue_hyphens(prepare(original_text), offsets, tags)):
+    for a, b in tags_to_spans(offsets, tags):
         label = original_text[slice(*trim(original_text, a, b))]
-        if hard_processing(label):          # an empty string counts as a false positive
+        if hard_processing(label) and not (guards and common_noun(label)):   # an empty string counts as a false positive
             out[label] = None               # the metric compares sets
     return list(out)
 

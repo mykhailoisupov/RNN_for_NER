@@ -12,7 +12,8 @@ class _CharTable(dict):
 
     def __missing__(self, cp):
         category = unicodedata.category(chr(cp))
-        if category in ("Zs", "Zl", "Zp", "Cf") or 0xFE00 <= cp <= 0xFE0F or cp == 0x20E3:
+        #  U+3164 HANGUL FILLER: a blank that Unicode counts as a letter, a line of its own in 33 test posts
+        if category in ("Zs", "Zl", "Zp", "Cf") or 0xFE00 <= cp <= 0xFE0F or cp in (0x20E3, 0x3164):
             out = " "
         elif cp >= 0x2190 and category in ("So", "Sk", "Cn", "Co"):   # keeps № ° © below U+2190
             out = " "

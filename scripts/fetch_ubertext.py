@@ -3,8 +3,9 @@ data/tg_geo_dataset.csv in the shape of uk_geo_dataset.csv, so build_dataset rel
 
     python -m scripts.fetch_ubertext [--shards 2]
 
-Only sentences with a LOC are kept: uk and ru have enough sentences without names. Labels differ from test in the
-type words (`селі X` has LOC `X`), `столиці` (O) and cities in posts (`мер Києва` is LOC); fix_spans relabels all three.
+Every sentence with a LOC is kept and at most as many without one: those give the Telegram posts without names and
+the lines of 1-3 words (`Далі буде…`) that build_dataset adds to posts. Labels differ from test in the type words
+(`селі X` has LOC `X`), `столиці` (O) and cities in posts (`мер Києва` is LOC); fix_spans relabels all three.
 """
 import argparse
 import urllib.request
@@ -61,16 +62,18 @@ def sentences(path):
 
 def fetch(shards):
     CACHE.mkdir(parents=True, exist_ok=True)
-    rows = []
+    rows, empty = [], 0
     for i in range(shards):
         path = CACHE / f"train-{i:05d}.parquet"
         if not path.exists():
             urllib.request.urlretrieve(URL.format(i), path)
         for tokens, tags in sentences(path):
-            if "B-LOC" in tags:
+            named = "B-LOC" in tags
+            if named or 2 * empty < len(rows):   # never more sentences without a LOC than with one
                 text, spans = detokenize(tokens, tags)
                 rows.append({"text": text, "loc_markers": spans["LOC"], "org_markers": spans["ORG"]})
-        print(f"shard {i}: {len(rows):,} sentences with a LOC so far", flush=True)
+                empty += not named
+        print(f"shard {i}: {len(rows) - empty:,} sentences with a LOC, {empty:,} without so far", flush=True)
     pd.DataFrame(rows).to_csv(DATA / "tg_geo_dataset.csv", index=False)
 
 

@@ -41,8 +41,9 @@ def load_train(train_size, seed):
 
 
 def load_eval():
-    """val from build_dataset, sample and test as the competition gives them; also the test ids."""
-    val = pd.read_parquet(NORMALIZED_DIR / "val.parquet", columns=["text", "spans"])
+    """val from build_dataset, sample and test as the competition gives them; also the test ids and the source
+    (uk, ru, tg) of every val post."""
+    val = pd.read_parquet(NORMALIZED_DIR / "val.parquet", columns=["text", "spans", "lang"])
     sample = pd.read_csv(DATA_DIR / "labeling_sample.csv")
     test = pd.read_csv(DATA_DIR / "test.csv")
     rows = {
@@ -50,7 +51,7 @@ def load_eval():
         "sample": _rows(sample["text"], sample["loc_markers"].map(parse_spans)),
         "test": _rows(test["text"], [[]] * len(test)),
     }
-    return rows, test["text_id"].tolist()
+    return rows, test["text_id"].tolist(), val["lang"].tolist()
 
 
 def build_examples(rows, vocab):
@@ -128,7 +129,7 @@ class NERDataModule(L.LightningDataModule):
     def setup(self, stage=None):
         if self.examples is not None:
             return
-        rows, self.test_ids = load_eval()
+        rows, self.test_ids, self.val_lang = load_eval()
         rows = {"train": load_train(self.cfg.train_size, self.cfg.seed), **rows}
         self.vocab = build_vocab(self.cfg, rows)
         self.vectors = self.vocab.vectors

@@ -1,4 +1,4 @@
-"""How test differs from the source corpora: vocabulary, neighbours, language, length and label profile."""
+"""How test differs from the source corpora: vocabulary, language, length and label profile."""
 import re
 import unicodedata
 from collections import Counter, defaultdict
@@ -134,55 +134,6 @@ def language_profile(texts):
                      "score": top.value, "margin": top.value - second.value,
                      "uncertain": top.value < .8 or top.value - second.value < .2})
     return pd.DataFrame(rows)
-
-
-def tfidf_neighbors(reference, test, name, analyzer):
-    from sklearn.feature_extraction.text import TfidfVectorizer
-    vectorizer = TfidfVectorizer(analyzer=analyzer, ngram_range=(1, 2) if analyzer == "word" else (3, 5),
-                                max_features=50_000, min_df=2, sublinear_tf=True, dtype=np.float32)
-    matrix = vectorizer.fit_transform(reference.text.map(comparison_text))
-    queries = vectorizer.transform(test.text.map(comparison_text))
-    rows = []
-    for start in range(0, len(test), 32):
-        similarities = (queries[start:start + 32] @ matrix.T).toarray()
-        for offset, scores in enumerate(similarities):
-            pos = int(scores.argmax())
-            rows.append({"dataset": name, "method": analyzer, "test_id": int(test.iloc[start + offset].text_id),
-                         "cosine": float(scores[pos]), "source_index": int(reference.index[pos]),
-                         "source_text": reference.iloc[pos].text})
-    return pd.DataFrame(rows)
-
-
-def domain_auc(reference, test):
-    from sklearn.feature_extraction.text import TfidfVectorizer
-    from sklearn.linear_model import LogisticRegression
-    from sklearn.metrics import roc_auc_score
-    from sklearn.model_selection import StratifiedGroupKFold
-    texts, labels, groups = [], [], []
-    for row in test.itertuples():
-        for sentence in re.split(r"(?<=[.!?…])\s+|\n+", row.text.replace("\\n", "\n")):
-            if len(words(sentence)) >= 5:
-                texts.append(comparison_text(sentence)); labels.append(1); groups.append(f"post:{row.text_id}")
-    negatives = reference.loc[reference.text.map(lambda t: len(words(t)) >= 5)].drop_duplicates("text")
-    negatives = negatives.sample(min(len(negatives), len(texts)), random_state=0)
-    for text in negatives.text:
-        texts.append(comparison_text(text)); labels.append(0); groups.append("source:" + comparison_text(text))
-    labels = np.array(labels)
-    predictions = np.zeros(len(texts))
-    fold_aucs = []
-    for train, valid in StratifiedGroupKFold(3, shuffle=True, random_state=0).split(texts, labels, groups):
-        vectorizer = TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5), max_features=30_000,
-                                    min_df=2, sublinear_tf=True, dtype=np.float32)
-        fit = vectorizer.fit_transform([texts[i] for i in train])
-        hold = vectorizer.transform([texts[i] for i in valid])
-        model = LogisticRegression(max_iter=300, random_state=0)
-        model.fit(fit, labels[train])
-        predictions[valid] = model.predict_proba(hold)[:, 1]
-        fold_aucs.append(roc_auc_score(labels[valid], predictions[valid]))
-    length_auc = roc_auc_score(labels, [len(words(t)) for t in texts])
-    return {"test_sentences": int(labels.sum()), "source_sentences": int((labels == 0).sum()),
-            "OOF_AUC": roc_auc_score(labels, predictions), "fold_AUC_min": min(fold_aucs),
-            "fold_AUC_max": max(fold_aucs), "length_only_AUC": max(length_auc, 1 - length_auc)}
 
 
 def feature_row(text, labels):

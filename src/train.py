@@ -10,7 +10,7 @@ from lightning.pytorch.loggers import WandbLogger
 from src.config import EVAL_SETS, MODELS_DIR, SUBMISSION_DIR, WANDB_ENTITY, WANDB_PROJECT, Config
 from src.dataset import NERDataModule
 from src.inference import SPLITS, load_model, predict_probs, save_probs
-from src.metric import counts_per_post, precision_recall_f1
+from src.metric import counts_per_post, hard_processing, precision_recall_f1
 from src.model import TaggerModule
 from src.submission import answers, write_submission
 
@@ -29,11 +29,18 @@ def run_name(cfg: Config):
     return "-".join([base, *changes])
 
 
-def score(examples, predictions):
-    """P/R/F1 of (index, word probabilities) pairs; the submission path without the test policy."""
-    y_true = [examples[i].locations for i, _ in predictions]
-    y_pred = [answers(examples[i], probs, policy=[]) for i, probs in predictions]
+def strings(examples, predictions):
+    """Gold and predicted names of (index, word probabilities) pairs; the submission path without the test policy."""
+    return ([examples[i].locations for i, _ in predictions],
+            [answers(examples[i], probs, policy=[]) for i, probs in predictions])
+
+
+def prf(y_true, y_pred):
     return dict(zip(("precision", "recall", "f1"), map(float, precision_recall_f1(counts_per_post(y_true, y_pred).sum(0)))))
+
+
+def score(examples, predictions):
+    return prf(*strings(examples, predictions))
 
 
 def oracle_f1(examples):
@@ -44,7 +51,11 @@ def oracle_f1(examples):
 
 
 class ValScore(L.Callback):
-    """val/sample P/R/F1 of the probabilities TaggerModule.validation_step returns."""
+    """val/sample P/R/F1 of the probabilities TaggerModule.validation_step returns. For val also F1 of the names train
+    labels (`val/f1_seen`), of the names it does not (`val/f1_unseen`) and of every source (`val/f1_tg`)."""
+
+    def on_fit_start(self, trainer, module):
+        self.seen = {hard_processing(s) for ex in trainer.datamodule.examples["train"] for s in ex.locations}
 
     def on_validation_epoch_start(self, trainer, module):
         self.outputs = {name: [] for name in EVAL_SETS}
@@ -56,9 +67,21 @@ class ValScore(L.Callback):
             self.outputs[name].append((i, row[examples[i].word_starts]))
 
     def on_validation_epoch_end(self, trainer, module):
+        data = trainer.datamodule
         for name, predictions in self.outputs.items():
-            for metric, value in score(trainer.datamodule.examples[name], predictions).items():
+            y_true, y_pred = strings(data.examples[name], predictions)
+            for metric, value in prf(y_true, y_pred).items():
                 module.log(f"{name}/{metric}", value, prog_bar=metric == "f1")
+            if name != "val":
+                continue
+            for label, known in (("seen", True), ("unseen", False)):   # a name is filtered in gold and predicted alike
+                keep = [[[s for s in row if (hard_processing(s) in self.seen) == known] for row in rows]
+                        for rows in (y_true, y_pred)]
+                module.log(f"val/f1_{label}", prf(*keep)["f1"])
+            lang = [data.val_lang[i] for i, _ in predictions]
+            for label in sorted(set(lang)):
+                rows = [k for k, source in enumerate(lang) if source == label]
+                module.log(f"val/f1_{label}", prf([y_true[k] for k in rows], [y_pred[k] for k in rows])["f1"])
 
 
 def run(cfg: Config):

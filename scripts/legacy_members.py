@@ -48,7 +48,7 @@ def load_member(run, eval_rows):
 
 
 def main(members, out):
-    eval_rows, _ = load_eval()
+    eval_rows, *_ = load_eval()
     out.mkdir(exist_ok=True)
     for run in members:
         model, vocab = load_member(run, eval_rows)

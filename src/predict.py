@@ -13,7 +13,7 @@ if __name__ == "__main__":
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
     model, vocab = load_model(args.checkpoint)
-    rows, _ = load_eval()
+    rows, *_ = load_eval()
     save_probs(args.out, {split: predict_probs(model, build_examples(rows[split], vocab), model.cfg.eval_batch_size)
                           for split in SPLITS})
     print("written", args.out)

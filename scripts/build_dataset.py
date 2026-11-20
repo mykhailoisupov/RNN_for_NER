@@ -24,7 +24,10 @@ OUT = DATA / "normalized"
 
 RU_SHARE, VAL_RU_SHARE = 0.20, 0.08
 TG_SHARE = 0.25                           # posts from Telegram sentences (scripts.fetch_ubertext), train and val
-VAL_PCT, VAL_PCT_RARE = 5, 20             # % of uk sentences sent to val: ordinary / with Kyiv or a street
+VAL_PCT, VAL_PCT_RARE = 5, 10             # % of uk sentences sent to val: ordinary / with Kyiv or a street
+HELD_PCT, HELD_MAX = 10, 50               # % of the name stems of at most 50 sentences that are held out for val
+FOOTER_SHARE = 0.05                       # posts that end with a blank line, left of a channel signature (test: 31%)
+SHORT_LINE_SHARE = 0.05                   # uk/tg posts that get a Telegram line of 1-3 words (test: 30% have one)
 UPSAMPLE_KYIV, UPSAMPLE_STREET = 4, 4
 HOUSE_NUMBER_P = 0.5
 CAPS_NAME_SHARE = 0.01                    # names in capitals (`КРЕЩАТИК`); test has ~3 in 477 posts, train had none
@@ -44,16 +47,15 @@ TARGET_EMPTY = np.array([0.4286, 0.2281, 0.2393, 0.1667, 0.1556])
 TARGET_PROFILE = {"names 0": 25.6, "names 1": 35.6, "names 2": 20.3, "names 3-4": 11.9, "names 5+": 6.5,
                   **{f"words {n}": 100 * p for n, p in zip(BIN_NAMES, TARGET_WORDS)},
                   "kyiv": 41.1, "street": 9.6, "multiline": 85.0, "median words": 36,
+                  #  what test has, not a target: FOOTER_SHARE and SHORT_LINE_SHARE are kept low on purpose
+                  "ends with newline": 36.9, "short line": 23.9,
                   "caps line": 1.7, "caps words / 1000": 6.0, "ru": 8.0}
 
 STATS = Counter()
 
 # Also imported by notebooks/eda, so the EDA numbers and the build use one definition.
 STREET =r"(?:вул\.|ул\.|вулиц[яіюе]|улиц[аыуеу]|проспект(?:і|у|ом|а|е)?|просп\.|провул(?:ок|ку)|переул(?:ок|ке)|бульвар(?:і|у|а|е)?|бул\.|площ(?:а|і|у|адь|ади)|набережн\w*)"
-PROBES = {
-    "Ukraine": re.compile(r"\b(?:Україн(?:а|и|і|у|ою)|Украин(?:а|ы|е|у|ой))\b", re.I),
-    "Kyiv": KYIV,
-}
+DISTRICT = r"район|област|\bобл\.|\bр-н\b|щин[аіиу]$"   # `Дарницькому районі`, `Київщина`
 WORD = re.compile(r"\w+(?:['-]\w+)*")
 FORM = re.compile(r"(?<![\w'’ʼ-])[А-ЯІЇЄҐA-Z][\w'’ʼ]+(?![\w'’ʼ-])")   # one capitalised word
 KYIV_MENTION = re.compile(r"київ|києв|киев", re.I)
@@ -63,6 +65,16 @@ CAPS_WORD = re.compile(r"(?<!\w)[A-ZА-ЯІЇЄҐЁ]{4,}(?!\w)")
 def caps_line(text):
     """Has the post a line of 8+ letters with no lowercase one?"""
     return any(sum(c.isalpha() for c in line) >= 8 and line == line.upper() for line in text.split("\n"))
+
+
+def short_line(text):
+    """Has the post a line of 1-3 words (`Слава ЗСУ!`, `Київ:`)?"""
+    return any(0 < len(WORD.findall(line)) <= 3 for line in text.split("\n"))
+
+
+def stem(name):
+    """`Баришівка`, `Баришівці` -> `баришів`: one key for the case forms of a name."""
+    return " ".join(w[:-2] or w for w in name.lower().split())
 
 
 def normalize_text(text):
@@ -79,7 +91,8 @@ def features(text, spans):
     labels = {text[a:b] for a, b in spans}
     return {"words": len(WORD.findall(text)), "labels": len(labels),
             "kyiv": bool(KYIV_MENTION.search(text)),
-            "street": any(re.search(STREET, s, re.I) for s in labels)}
+            "street": any(re.search(STREET, s, re.I) for s in labels),
+            "district": any(re.search(DISTRICT, s, re.I) for s in labels)}
 
 
 # --- relabelling one sentence, same rules for uk and ru -------------------------------
@@ -165,9 +178,20 @@ def load_sentences(lang, chunksize=500_000):
     if lang == "ru":
         key = df.doc_id.map(_crc)
         in_val = key % 20 == 0
-    else:   # a larger share of Kyiv and street sentences makes val test-like without repeats
+    else:
+        #  Names held out for val: every sentence with a rare name stem goes there, so a third of the val names are
+        #  new to the model, as in test (a split by sentence alone leaves 10%). Frequent names (`Київ`) stay in both.
+        #  ponytail: stems are counted per source, a name rare in uk and frequent in tg stays seen; count over all
+        #  sources in build() if the `val names that train does not label` share it prints falls short.
+        stems = [{stem(t[a:b]) for a, b in s} for t, s in zip(df.text, df.spans)]
+        count = Counter(x for row in stems for x in row)
+        held = {x for x, n in count.items() if n <= HELD_MAX and _crc(x) % 100 < HELD_PCT}
+        has_held = np.array([not held.isdisjoint(row) for row in stems])
+        STATS["name stems held out for val"] = len(held)
+        STATS["sentences with a held-out name"] = int(has_held.sum())
         key = df.norm.map(_crc)
-        in_val = key % 100 < np.where(df.kyiv | df.street, VAL_PCT_RARE, VAL_PCT)
+        #  a larger share of Kyiv and street sentences makes val test-like without repeats
+        in_val = has_held | (key % 100 < np.where(df.kyiv | df.street, VAL_PCT_RARE, VAL_PCT))
     df["split"] = np.where(in_val, "val", "train")
     df["fold"] = key // 100 % N_FOLDS
     assert not df.norm.duplicated().any()   # one copy per sentence: no leak between splits or folds
@@ -330,6 +354,25 @@ def add_name_lines(texts, spans, share, seed):
     return out_texts, out_spans
 
 
+def add_short_lines(texts, spans, pool, share, seed):
+    """A Telegram sentence of 1-3 words with its labels (`Далі буде…`, `Феодосія.`) before or after `share` of the
+    posts; `pool` holds (text, spans) of this split only."""
+    rng = random.Random(seed)
+    out_texts, out_spans = [], []
+    for text, pairs in zip(texts, spans):
+        if pool and rng.random() < share:
+            text, pairs = _attach(text, pairs, *rng.choice(pool), rng)
+        out_texts.append(text)
+        out_spans.append(pairs)
+    return out_texts, out_spans
+
+
+def add_blank_footer(texts, share, seed):
+    """`text\\n\\n      `: what blank_footers leaves of the channel signature under a test post. Labels do not move."""
+    rng = random.Random(seed)
+    return [text + "\n\n" + " " * rng.randint(15, 55) if rng.random() < share else text for text in texts]
+
+
 LINE = re.compile(r"[^\n]+")
 PLAIN_WORD = re.compile(r"[^\W\d_]{4,}")
 
@@ -367,8 +410,10 @@ def profile(posts):
     words = np.bincount(np.searchsorted(BIN_HIGH[:-1], f.words), minlength=len(BIN_NAMES)) / len(f)
     return {**{f"names {k}": 100 * v for k, v in names.value_counts(normalize=True, sort=False).items()},
             **{f"words {n}": 100 * w for n, w in zip(BIN_NAMES, words)},
-            "kyiv": 100 * f.kyiv.mean(), "street": 100 * f.street.mean(),
+            "kyiv": 100 * f.kyiv.mean(), "street": 100 * f.street.mean(), "district": 100 * f.district.mean(),
             "multiline": 100 * posts.text.str.contains("\n").mean(), "median words": f.words.median(),
+            "ends with newline": 100 * posts.text.str.contains(r"\n *$").mean(),
+            "short line": 100 * posts.text.map(short_line).mean(),
             "caps line": 100 * posts.text.map(caps_line).mean(),
             "caps words / 1000": 1000 * posts.text.str.count(CAPS_WORD.pattern).sum() / f.words.sum(),
             "ru": 100 * posts.lang.eq("ru").mean(), "tg": 100 * posts.lang.eq("tg").mean(), "posts": len(posts)}
@@ -412,7 +457,12 @@ def build(rebuild=False, ru_share=RU_SHARE, tg_share=TG_SHARE, seed=0):
             posts = pd.concat(folds, ignore_index=True)
             # Test has lists and headings of bare names (`Чорнобиль - 19`); names come from this split only.
             texts, spans = add_name_lines(posts.text.tolist(), posts.spans.tolist(), NAME_LINES_SHARE, seed)
+            if lang != "ru" and "tg" in sentences:   # a Ukrainian line in a Russian post would be made up
+                tg = sentences["tg"]
+                short = tg[tg.split.eq(split) & tg.words.between(1, 3)]
+                texts, spans = add_short_lines(texts, spans, list(zip(short.text, short.spans)), SHORT_LINE_SHARE, seed + 1)
             texts = add_caps(texts, spans, CAPS_NAME_SHARE, CAPS_SENTENCE_SHARE, CAPS_WORD_SHARE, seed)
+            texts = add_blank_footer(texts, FOOTER_SHARE, seed + 2)
             parts[lang] = posts.assign(text=texts, spans=spans)
             _report(f"{split} {lang}: removal of data without names")
         shares = {lang: share for lang, share in (("ru", ru), ("tg", tg_share)) if lang in parts}
@@ -428,6 +478,10 @@ def build(rebuild=False, ru_share=RU_SHARE, tg_share=TG_SHARE, seed=0):
 
     table = pd.DataFrame({"test": TARGET_PROFILE, **{name: profile(posts) for name, posts in result.items()}})
     print("\nProfile, % of posts\n" + table.round(1).to_string())
+    names = {split: Counter(t[a:b] for t, spans in zip(posts.text, posts.spans) for a, b in spans)
+             for split, posts in result.items()}
+    unseen = sum(n for name, n in names["val"].items() if name not in names["train"])
+    print(f"\nval names that train does not label: {100 * unseen / sum(names['val'].values()):.1f}% (test: 23-28%)")
     return result
 
 

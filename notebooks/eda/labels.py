@@ -5,11 +5,16 @@ from collections import Counter
 import numpy as np
 import pandas as pd
 
-from scripts.build_dataset import PROBES, STATS, STREET, fix_spans
-from src.label_policy import NAME_WORD
+from scripts.build_dataset import DISTRICT, STATS, STREET, fix_spans
+from src.label_policy import KYIV, NAME_WORD
 from src.text import prepare
 
 from .test_vs_sources import comparison_text, words
+
+PROBES = {   # names whose mentions context_probes counts: labelled, inside an ORG only, not labelled
+    "Ukraine": re.compile(r"\b(?:Україн(?:а|и|і|у|ою)|Украин(?:а|ы|е|у|ой))\b", re.I),
+    "Kyiv": KYIV,
+}
 
 # Chosen on a grid (min 2/3/5/10, share 0/.3/.5/.7, ru forms, generic patterns): F1 sample 0.716 / uk val 0.842.
 LEXICON_MIN, LEXICON_SHARE, LEXICON_SCAN = 2, 0.5, 300_000
@@ -101,33 +106,9 @@ def boundary_profile(records):
     return dict(totals)
 
 
-def same_core_variants(source_counts, test_counts):
-    target = {core_form(s) for s in test_counts} - {""}
-    lookup = {}
-    for name, counts in source_counts.items():
-        grouped = {}
-        for label, n in counts.items():
-            core = core_form(label)
-            if core in target: grouped.setdefault(core, Counter())[label] += n
-        lookup[name] = grouped
-    rows = []
-    for label, n in test_counts.items():
-        core = core_form(label)
-        if not core: continue
-        for name, grouped in lookup.items():
-            candidates = grouped.get(core, {})
-            if not candidates: continue
-            variants = Counter(candidates).most_common(5)
-            rows.append({"test_prediction": label, "test_posts": n, "core": core, "source": name,
-                         "exact_form_seen": comparison_text(label) in {comparison_text(s) for s in candidates},
-                         "source_variants": variants,
-                         "different_boundary_style": any(bool(PREFIX.search(label)) != bool(PREFIX.search(s)) or bool(SUFFIX.search(label)) != bool(SUFFIX.search(s)) for s in candidates)})
-    return pd.DataFrame(rows)
-
-
 FORM_PATTERNS = {
     "street_address": rf"(?:{STREET}|узвіз|шосе)",
-    "district_region": r"район|област|\bобл\.|\bр-н\b|щин[аіиу]$",
+    "district_region": DISTRICT,
     "station_metro": r"метро|станці|станци|вокзал",
     "building_complex": r"\b(?:ТЦ|ТРЦ|ЖК|БЦ)\b|стадіон|стадион|аеропорт|аэропорт|університет|университет",
     "natural_feature": r"річк|\bрек[аиуы]\b|мор[ея]|озер|остр[іо]в|заток|залив|лагун|парк|ліс|\bлес\b",

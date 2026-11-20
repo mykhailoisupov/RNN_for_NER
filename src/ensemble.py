@@ -21,7 +21,7 @@ def average(members, weights, split):
 
 
 def eval_examples():
-    rows, test_ids = load_eval()
+    rows, test_ids, _ = load_eval()
     return {split: build_examples(rows[split], NoVocab()) for split in SPLITS}, test_ids
 
 

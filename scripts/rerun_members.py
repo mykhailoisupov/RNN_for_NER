@@ -126,14 +126,6 @@ def main(members):
 
 
 if __name__ == "__main__":
-    assert windows(10, 4, 2) == [(0, 4), (2, 6), (4, 8), (6, 10)]
-    assert windows(9, 4, 2) == [(0, 4), (2, 6), (4, 8), (5, 9)]
-    assert windows(3, 4, 2) == [(0, 3)]
-    ex = Example("", [("w", 0, 1)] * 6, [], [1] * 6, [0] * 6, list(range(6)))
-    subs, owners = window_examples([ex], 4, 2)
-    merged = merge_windows([ex], [np.full((4, 3), 1.0), np.full((4, 3), 3.0)], owners)[0]
-    assert owners == [(0, 0), (0, 2)] and merged[1, 0] == 1 and merged[2, 0] == 2 and merged[5, 0] == 3
-
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--members", nargs="+", default=list(MEMBERS))
     main(parser.parse_args().members)

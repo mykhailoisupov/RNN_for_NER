@@ -123,36 +123,3 @@ def rampart_tags(raw, offsets, probs, tags, min_score=MIN_SCORE, extend_score=EX
             out[k] = B if n == 0 else I
     return out
 
-
-if __name__ == "__main__":
-    import numpy as np
-
-    def run(text, words, tags, scores, **kw):
-        offsets, pos = [], 0
-        for w in words:
-            pos = text.index(w, pos)
-            offsets.append((pos, pos + len(w)))
-            pos += len(w)
-        probs = np.zeros((len(words), 3))
-        probs[np.arange(len(words)), tags] = scores
-        return rampart_tags(text, offsets, probs, tags, **kw)
-
-    # O words are dropped, so B O I is one span across the O word.
-    assert run("вул. Велика Васильківська", ["вул", ".", "Велика", "Васильківська"], [B, O, I, I], [.9, .9, .9, .9]) == [B, I, I, I]
-    # A weak span survives next to an anchor across a space, not across a comma.
-    assert run("Київ Пасажирський", ["Київ", "Пасажирський"], [B, B], [.9, .2]) == [B, I]
-    assert run("Київ, Львів", ["Київ", ",", "Львів"], [B, O, B], [.9, .9, .2]) == [B, O, O]
-    # Two anchors joined by a hyphen become one span.
-    assert run("Івано - Франківськ", ["Івано", "-", "Франківськ"], [B, O, B], [.9, .9, .9]) == [B, I, I]
-    # A period bridges only after an initial.
-    assert run("Київ. Львів", ["Київ", ".", "Львів"], [B, O, B], [.9, .9, .9]) == [B, O, B]
-    assert run("м. Т. Шевченка", ["м", ".", "Т", ".", "Шевченка"], [O, O, B, O, B], [.9, .9, .9, .9, .9]) == [O, O, B, I, I]
-    # Below EXTEND_SCORE a span is dropped even next to an anchor.
-    assert run("Київ Пасажирський", ["Київ", "Пасажирський"], [B, B], [.9, .1]) == [B, O]
-    # A lone weak span with no anchor is dropped.
-    assert run("у Києві", ["у", "Києві"], [O, B], [.9, .3]) == [O, O]
-    # Rescue (off for LOC by default): an untagged capitalised particle joins, a lowercase word does not.
-    assert run("Нью Йорк", ["Нью", "Йорк"], [O, B], [.9, .9]) == [O, B]
-    assert run("Нью Йорк", ["Нью", "Йорк"], [O, B], [.9, .9], rescue=True) == [B, I]
-    assert run("у Йорк", ["у", "Йорк"], [O, B], [.9, .9], rescue=True) == [O, B]
-    print("rampart port: ok")

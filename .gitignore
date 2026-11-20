@@ -13,4 +13,3 @@ submission/
 .env
 .DS_Store
 wandb/
-/tests/

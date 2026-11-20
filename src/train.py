@@ -14,6 +14,7 @@ from src.metric import counts_per_post, hard_processing, precision_recall_f1
 from src.model import TaggerModule
 from src.project import MODELS_DIR, SUBMISSION_DIR, WANDB_ENTITY, WANDB_PROJECT
 from src.submission import answers, write_submission
+from src.tags import TAGS
 
 NAME_SKIP = {"embedding", "rnn", "bidirectional", "name", "wandb_mode", "accelerator"}
 
@@ -53,7 +54,7 @@ def score(examples, predictions):
 
 def oracle_f1(examples):
     """F1 of the gold tags through the answers path: what tags lose by themselves."""
-    return {f"{name}/oracle_f1": score(examples[name], [(i, np.eye(3)[np.array(ex.labels)[ex.word_starts]])
+    return {f"{name}/oracle_f1": score(examples[name], [(i, np.eye(len(TAGS))[np.array(ex.labels)[ex.word_starts]])
                                                        for i, ex in enumerate(examples[name])])["f1"]
             for name in EVAL_SETS}
 

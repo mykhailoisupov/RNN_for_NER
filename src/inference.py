@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 
 from src.dataset import SPLITS, BucketSampler, Example, NERDataset, collate
 from src.model import TaggerModule
+from src.tags import TAGS
 from src.vocab import saved_vocab
 
 WINDOW, OVERLAP = 256, 64
@@ -66,7 +67,7 @@ def predict_probs(model, examples, batch_size, window=WINDOW, overlap=OVERLAP, o
             pieces.append(Example(ex.text, ex.tokens[a:b], [], ex.ids[a:b], ex.labels[a:b], list(range(b - a)),
                                   ex.chars[a:b], ex.shapes[a:b]))
             owners.append((i, a))
-    sums = [np.zeros((len(ex.word_starts), 3)) for ex in examples]
+    sums = [np.zeros((len(ex.word_starts), len(TAGS))) for ex in examples]
     counts = [np.zeros(len(ex.word_starts)) for ex in examples]
     for probs, (i, a) in zip(_word_probs(model, pieces, batch_size, on), owners):
         sums[i][a:a + len(probs)] += probs

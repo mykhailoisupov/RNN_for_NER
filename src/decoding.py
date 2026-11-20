@@ -1,8 +1,8 @@
-"""Word probabilities -> word tags: Viterbi that never starts a name on I, then rampart's span repair."""
+"""Word probabilities -> spans: Viterbi that never starts a name on I, then rampart's span repair."""
 import torch
 
-from src.rampart import rampart_tags
-from src.tags import I, O, TAGS
+from src.rampart import rampart_spans
+from src.tags import I, O, TAGS, tags_to_spans
 
 
 def viterbi(logits, lengths):
@@ -32,11 +32,11 @@ def viterbi(logits, lengths):
 
 
 def decode(text, tokens, probs, rampart=True):
-    """Tags of one post from its word probabilities [words, 3]. Rampart joins neighbours across a space, hyphen,
-    apostrophe or an initial's period and drops weak names with no confident neighbour."""
+    """(start, end) spans of one post from its word probabilities [words, tags]. Rampart joins neighbours across a
+    space, hyphen, apostrophe or an initial's period and drops weak names with no confident neighbour."""
     if not len(probs):
         return []
     tags = viterbi(torch.log(torch.tensor(probs).clamp_min(1e-9))[None], torch.tensor([len(probs)]))[0]
     if rampart:
-        tags = rampart_tags(text, [(t.start, t.end) for t in tokens], probs, tags)
-    return tags
+        return rampart_spans(text, [(t.start, t.end) for t in tokens], probs, tags)
+    return tags_to_spans(tokens, tags)

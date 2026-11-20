@@ -5,6 +5,8 @@ carry their tag and its probability. Because O words are gone, `B O I` merges in
 """
 import re
 
+from src.tags import B, O
+
 MIN_SCORE = 0.4        # anchors: spans at least this confident
 EXTEND_SCORE = 0.15    # weaker spans survive only next to an anchor
 MAX_ITERS = 32
@@ -14,7 +16,6 @@ UPPER = "[A-ZÀ-ÖØ-ÞА-ЯЁІЇЄҐЎ]"
 PARTICLE = rf"{UPPER}(?:[^\W\d_]|['’]){{0,3}}"
 LEFT_PARTICLE_RE = re.compile(rf"({PARTICLE})([\s'’.-]{{1,3}})$")
 RIGHT_PARTICLE_RE = re.compile(rf"([\s'’.-]{{1,3}})({PARTICLE})")
-O, B, I = 0, 1, 2
 
 
 def merge_bio_tokens(tokens):
@@ -105,14 +106,9 @@ def repair_spans(raw, spans, anchor_score=MIN_SCORE, extend_score=EXTEND_SCORE, 
     return sorted(kept, key=lambda s: (s["start"], s["end"]))
 
 
-def rampart_tags(raw, offsets, probs, tags, min_score=MIN_SCORE, extend_score=EXTEND_SCORE, rescue=False):
-    """Word tags (O/B/I ids) + their probabilities -> word tags after rampart's merge and repair."""
+def rampart_spans(raw, offsets, probs, tags, min_score=MIN_SCORE, extend_score=EXTEND_SCORE, rescue=False):
+    """Viterbi tags + their probabilities -> (start, end) spans after rampart's merge and repair."""
     tokens = [(t, a, b, float(probs[k, t])) for k, (t, (a, b)) in enumerate(zip(tags, offsets)) if t != O]
     spans = [s for s in merge_bio_tokens(tokens) if s["score"] >= extend_score and s["end"] > s["start"]]
-    out = [O] * len(offsets)
-    for span in repair_spans(raw, spans, min_score, extend_score, rescue):
-        inside = [k for k, (a, b) in enumerate(offsets) if a < span["end"] and b > span["start"]]
-        for n, k in enumerate(inside):
-            out[k] = B if n == 0 else I
-    return out
+    return [(s["start"], s["end"]) for s in repair_spans(raw, spans, min_score, extend_score, rescue)]
 

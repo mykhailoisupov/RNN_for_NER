@@ -1,10 +1,10 @@
 """Word tags O, B, I and the character spans they stand for."""
-TAGS = ["O", "B-LOC", "I-LOC"]
+TAGS = ["O", "B", "I"]       # one entity type: a location
 O, B, I = range(len(TAGS))
 
 
 def spans_to_tags(tokens, spans):
-    """A tag per token; a token already inside an earlier span keeps its tag."""
+    """A tag per token; a token already taken by an earlier, overlapping span keeps its tag."""
     tags = [O] * len(tokens)
     for a, b in spans:
         inside = [i for i, t in enumerate(tokens) if t.start < b and t.end > a]
@@ -15,6 +15,7 @@ def spans_to_tags(tokens, spans):
 
 
 def tags_to_spans(tokens, tags):
+    """A stray I after O starts a span of its own; Viterbi never gives one."""
     spans, i = [], 0
     while i < len(tags):
         if tags[i] == O:

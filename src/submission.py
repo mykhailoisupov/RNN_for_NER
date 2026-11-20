@@ -11,7 +11,6 @@ import pandas as pd
 from src.decoding import decode
 from src.label_policy import POLICY, relabel, trim_edges
 from src.metric import hard_processing
-from src.tags import tags_to_spans
 from src.tokenizer import prepare
 
 
@@ -31,7 +30,7 @@ def answers(example, probs, rampart=True, repairs=SPAN_REPAIRS, policy=POLICY):
     """Word probabilities of one post -> its answers: tags, spans, repairs, the label policy (not for val and sample:
     `policy=[]` scores the model alone), strings. The metric compares sets; an empty string is a false positive."""
     text = example.text
-    spans = tags_to_spans(example.tokens, decode(text, example.tokens, probs, rampart))
+    spans = decode(text, example.tokens, probs, rampart)
     for repair in repairs:
         spans = repair(text, spans)
     if policy:

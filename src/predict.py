@@ -4,8 +4,8 @@
 """
 import argparse
 
-from src.dataset import build_examples, load_eval
-from src.inference import SPLITS, load_model, predict_probs, save_probs
+from src.dataset import SPLITS, build_examples, load_eval
+from src.inference import load_model, predict_probs, save_probs
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -14,6 +14,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     model, vocab = load_model(args.checkpoint)
     rows, *_ = load_eval()
-    save_probs(args.out, {split: predict_probs(model, build_examples(rows[split], vocab), model.cfg.eval_batch_size)
+    save_probs(args.out, {split: predict_probs(model, build_examples(rows[split], vocab), model.cfg.data.eval_batch_size)
                           for split in SPLITS})
     print("written", args.out)

@@ -9,12 +9,11 @@ the lines of 1-3 words (`Далі буде…`) that build_dataset adds to posts
 """
 import argparse
 import urllib.request
-from pathlib import Path
-
 import pandas as pd
 
-DATA = Path(__file__).resolve().parent.parent / "data"
-CACHE = DATA / "external" / "ubertext-ner-silver"
+from src.project import DATA_DIR, EXTERNAL_DIR
+
+CACHE = EXTERNAL_DIR / "ubertext-ner-silver"
 URL = "https://huggingface.co/datasets/lang-uk/UberText-NER-Silver/resolve/main/data/train-{:05d}-of-00009.parquet"
 NO_SPACE_BEFORE = set(",.;:!?)]»%…”")
 NO_SPACE_AFTER = set("([«„“")
@@ -74,7 +73,7 @@ def fetch(shards):
                 rows.append({"text": text, "loc_markers": spans["LOC"], "org_markers": spans["ORG"]})
                 empty += not named
         print(f"shard {i}: {len(rows) - empty:,} sentences with a LOC, {empty:,} without so far", flush=True)
-    pd.DataFrame(rows).to_csv(DATA / "tg_geo_dataset.csv", index=False)
+    pd.DataFrame(rows).to_csv(DATA_DIR / "tg_geo_dataset.csv", index=False)
 
 
 if __name__ == "__main__":

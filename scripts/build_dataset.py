@@ -7,20 +7,16 @@ Run from the project root.
 import argparse
 import random
 import re
-import unicodedata
-import zlib
 from collections import Counter
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from src.label_policy import CAPITAL, KYIV, LOWERABLE, REGION_ADJ, TRAIN_POLICY, clean_spans, relabel
+from src.corpus import DISTRICT, STREET, crc, fix_spans, normalize_text
+from src.label_policy import REGION_ADJ
+from src.project import DATA_DIR, NORMALIZED_DIR, WANDB_ENTITY, WANDB_PROJECT
 from src.tags import aligned
 from src.text import parse_spans, prepare, tokenize
-
-DATA = Path(__file__).resolve().parent.parent / "data"
-OUT = DATA / "normalized"
 
 RU_SHARE, VAL_RU_SHARE = 0.20, 0.08
 TG_SHARE = 0.25                           # posts from Telegram sentences (scripts.fetch_ubertext), train and val
@@ -55,9 +51,6 @@ TARGET_PROFILE = {"names 0": 35.2, "names 1": 31.4, "names 2": 17.2, "names 3-4"
 
 STATS = Counter()
 
-# Also imported by notebooks/eda, so the EDA numbers and the build use one definition.
-STREET =r"(?:вул\.|ул\.|вулиц[яіюе]|улиц[аыуеу]|проспект(?:і|у|ом|а|е)?|просп\.|провул(?:ок|ку)|переул(?:ок|ке)|бульвар(?:і|у|а|е)?|бул\.|площ(?:а|і|у|адь|ади)|набережн\w*)"
-DISTRICT = r"район|област|\bобл\.|\bр-н\b|щин[аіиу]$"   # `Дарницькому районі`, `Київщина`
 WORD = re.compile(r"\w+(?:['-]\w+)*")
 FORM = re.compile(r"(?<![\w'’ʼ-])[А-ЯІЇЄҐA-Z][\w'’ʼ]+(?![\w'’ʼ-])")   # one capitalised word
 KYIV_MENTION = re.compile(r"київ|києв|киев", re.I)
@@ -79,11 +72,6 @@ def stem(name):
     return " ".join(w[:-2] or w for w in name.lower().split())
 
 
-def normalize_text(text):
-    """Deduplication key only; NFKC changes length, so it never reaches the model."""
-    return re.sub(r"\W+", " ", unicodedata.normalize("NFKC", text).lower()).strip()
-
-
 def normalised_loc_signature(text, spans):
     return tuple(sorted((normalize_text(text[:a]), normalize_text(text[a:b]), normalize_text(text[b:]))
                         for a, b in spans if normalize_text(text[a:b])))
@@ -97,55 +85,16 @@ def features(text, spans):
             "district": any(re.search(DISTRICT, s, re.I) for s in labels)}
 
 
-# --- relabelling one sentence, same rules for uk and ru -------------------------------
-TCH = re.compile(r"\s[-–—]\s[^-–—]{1,40}\s[-–—]\s*TCH\.?\s*$")
-
-
-def fix_spans(text, loc, org=()):
-    """Prepared sentence + raw LOC/ORG spans -> (text, spans) labelled like test, or None to drop the row."""
-    assert all(0 <= a < b <= len(text) for a, b in [*loc, *org])
-    cut = TCH.search(text) if "TCH" in text else None   # `... - Київ - TCH.` is a site tag, not text
-    if cut:
-        text = text[:cut.start()]
-        loc, org = ([s for s in spans if s[1] <= len(text)] for spans in (loc, org))
-        STATS["TCH footer cut"] += 1
-    if not text.strip():
-        STATS["rows dropped: empty text"] += 1
-        return None
-    spans = clean_spans(text, loc)
-    STATS["rows changed by clean_spans"] += spans != list(loc)
-    relabelled = relabel(text, spans, TRAIN_POLICY, STATS)
-    #  A label inside an ORG span is dropped (`Динамо Київ`); a Kyiv or «столиця» mention the policy adds, if it touches
-    #  one at all: ORG offsets are shifted now and then (`Укрістгаз (Ки`).
-    added = [s for s in relabelled if s not in spans and (KYIV.fullmatch(text, *s) or CAPITAL.fullmatch(text, *s))]
-    spans = [(a, b) for a, b in relabelled
-             if not any(c <= a and b <= d or (a, b) in added and c < b and a < d for c, d in org)]
-    STATS["LOC inside ORG removed"] += len(relabelled) - len(spans)
-    if _crc(text) % 5 == 0:     # `москви`, `рф`: test writes them in lowercase, train never does; 20% of sentences
-        for a, b in spans:
-            if LOWERABLE.fullmatch(text, a, b):
-                text = text[:a] + text[a:b].lower() + text[b:]
-                STATS["LOC lowercased"] += 1
-    if spans and not aligned(tokenize(text), spans):   # shifted offsets or glued words, not fixable
-        STATS["rows dropped: span cuts a word"] += 1
-        return None
-    return text, spans
-
-
 # --- sentence tables ---------------------------------------------------------------------
-def _crc(value):
-    return zlib.crc32(str(value).encode())
-
-
 def load_sentences(lang, chunksize=500_000):
     """Clean every row. Copies and label conflicts are judged on the whole corpus, not on the kept part."""
     extra = ["doc_id", "sent_id"] if lang == "ru" else []
     kept, norm_hashes, label_hashes = [], [], []
     labelled, seen = Counter(), Counter()
-    for chunk in pd.read_csv(DATA / f"{lang}_geo_dataset.csv", chunksize=chunksize,
+    for chunk in pd.read_csv(DATA_DIR / f"{lang}_geo_dataset.csv", chunksize=chunksize,
                              usecols=["text", "loc_markers", "org_markers", *extra]):
         STATS["rows in"] += len(chunk)
-        rows = [fix_spans(prepare(t), parse_spans(loc), parse_spans(org))
+        rows = [fix_spans(prepare(t), parse_spans(loc), parse_spans(org), STATS)
                 for t, loc, org in zip(chunk.text, chunk.loc_markers, chunk.org_markers)]
         for text, spans in filter(None, rows):
             forms = list(FORM.finditer(text, 1))      # inside any span counts: `Незалежності` in `майдані Незалежності`
@@ -178,7 +127,7 @@ def load_sentences(lang, chunksize=500_000):
     STATS["LOC of a rare form removed"] = int(before - df.spans.map(len).sum())
     df = df.join(pd.DataFrame([features(t, s) for t, s in zip(df.text, df.spans)]))
     if lang == "ru":
-        key = df.doc_id.map(_crc)
+        key = df.doc_id.map(crc)
         in_val = key % 20 == 0
     else:
         #  Names held out for val: every sentence with a rare name stem goes there, so a third of the val names are
@@ -187,11 +136,11 @@ def load_sentences(lang, chunksize=500_000):
         #  sources in build() if the `val names that train does not label` share it prints falls short.
         stems = [{stem(t[a:b]) for a, b in s} for t, s in zip(df.text, df.spans)]
         count = Counter(x for row in stems for x in row)
-        held = {x for x, n in count.items() if n <= HELD_MAX and _crc(x) % 100 < HELD_PCT}
+        held = {x for x, n in count.items() if n <= HELD_MAX and crc(x) % 100 < HELD_PCT}
         has_held = np.array([not held.isdisjoint(row) for row in stems])
         STATS["name stems held out for val"] = len(held)
         STATS["sentences with a held-out name"] = int(has_held.sum())
-        key = df.norm.map(_crc)
+        key = df.norm.map(crc)
         #  a larger share of Kyiv and street sentences makes val test-like without repeats
         in_val = has_held | (key % 100 < np.where(df.kyiv | df.street, VAL_PCT_RARE, VAL_PCT))
     df["split"] = np.where(in_val, "val", "train")
@@ -430,11 +379,11 @@ def _report(title):
 
 
 def build(rebuild=False, ru_share=RU_SHARE, tg_share=TG_SHARE, seed=0):
-    OUT.mkdir(exist_ok=True)
+    NORMALIZED_DIR.mkdir(exist_ok=True)
     sentences = {}
     for lang in ("uk", "ru", "tg"):   # stage 1: cleaning and labels, cached because ru takes minutes
-        path = OUT / f"{lang}_sentences.parquet"
-        if lang == "tg" and not (DATA / "tg_geo_dataset.csv").exists() and not path.exists():
+        path = NORMALIZED_DIR / f"{lang}_sentences.parquet"
+        if lang == "tg" and not (DATA_DIR / "tg_geo_dataset.csv").exists() and not path.exists():
             print("no data/tg_geo_dataset.csv (python -m scripts.fetch_ubertext): posts without Telegram sentences")
             continue
         if rebuild or not path.exists():
@@ -476,7 +425,7 @@ def build(rebuild=False, ru_share=RU_SHARE, tg_share=TG_SHARE, seed=0):
         posts = pd.concat(parts.values()).sample(frac=1, random_state=seed).reset_index(drop=True)
         assert all(aligned(tokenize(t), s) for t, s in zip(posts.text, posts.spans))
         result[split] = posts
-        posts.drop(columns=[] if split == "train" else ["fold"]).to_parquet(OUT / f"{split}.parquet")
+        posts.drop(columns=[] if split == "train" else ["fold"]).to_parquet(NORMALIZED_DIR / f"{split}.parquet")
 
     table = pd.DataFrame({"test": TARGET_PROFILE, **{name: profile(posts) for name, posts in result.items()}})
     print("\nProfile, % of posts\n" + table.round(1).to_string())
@@ -491,12 +440,10 @@ def upload():
     """Log train/val parquet as W&B artifact `normalized`; colab.setup() downloads the latest one."""
     import wandb
 
-    from src.config import WANDB_ENTITY, WANDB_PROJECT
-
     with wandb.init(entity=WANDB_ENTITY, project=WANDB_PROJECT, job_type="dataset") as run:
         artifact = wandb.Artifact("normalized", type="dataset")
         for split in ("train", "val"):
-            artifact.add_file(str(OUT / f"{split}.parquet"))
+            artifact.add_file(str(NORMALIZED_DIR / f"{split}.parquet"))
         run.log_artifact(artifact)
 
 

@@ -5,7 +5,7 @@ from collections import Counter
 import numpy as np
 import pandas as pd
 
-from scripts.build_dataset import DISTRICT, STATS, STREET, fix_spans
+from src.corpus import DISTRICT, STREET, fix_spans
 from src.label_policy import KYIV, NAME_WORD
 from src.text import prepare
 
@@ -49,7 +49,6 @@ def regex_labeller(sent):
         spans = [m.span() for m in rx.finditer(text)]
         spans += [m.span() for m in STREET_NAME.finditer(text)] + [m.span(1) for m in SETTLEMENT_NAME.finditer(text)]
         out = fix_spans(text, spans)
-        STATS.clear()
         return out[1] if out else []
     return label
 

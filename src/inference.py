@@ -8,12 +8,10 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from src.config import Config
-from src.dataset import BucketSampler, Example, NERDataset, collate
+from src.dataset import SPLITS, BucketSampler, Example, NERDataset, collate
 from src.model import TaggerModule
 from src.vocab import saved_vocab
 
-SPLITS = ("val", "sample", "test")
 WINDOW, OVERLAP = 256, 64
 
 
@@ -28,8 +26,8 @@ def device():
 def load_model(path):
     """A checkpoint saved by src.train -> (model, vocab); the data is not needed."""
     checkpoint = torch.load(path, map_location="cpu", weights_only=False)
-    cfg = Config(**checkpoint["config"])
-    vocab = saved_vocab(cfg, checkpoint["vocab"])
+    cfg = checkpoint["config"]
+    vocab = saved_vocab(cfg.vocab, checkpoint["vocab"])
     model = TaggerModule(cfg, vocab)
     model.load_state_dict(checkpoint["state_dict"])
     return model, vocab

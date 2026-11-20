@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from getpass import getpass
 from pathlib import Path
 
-from src.config import DATA_DIR, KAGGLE_COMPETITION, ROOT, WANDB_ENTITY, WANDB_PROJECT
+from src.project import DATA_DIR, KAGGLE_COMPETITION, NORMALIZED_DIR, ROOT, WANDB_ENTITY, WANDB_PROJECT
 
 PACKAGES = {"lightning": "lightning", "wandb": "wandb", "bpemb": "bpemb", "kaggle": "kaggle", "flair": "flair>=0.15"}
 DATA_FILES = ["test.csv", "labeling_sample.csv"]
@@ -95,14 +95,13 @@ def download_data():
 
 def download_normalized():
     """train/val built by scripts/build_dataset.py, uploaded there with --upload."""
-    out = DATA_DIR / "normalized"
-    if all((out / f).exists() for f in NORMALIZED):
+    if all((NORMALIZED_DIR / f).exists() for f in NORMALIZED):
         print("normalized: ok")
         return
     import wandb
 
     artifact = wandb.Api().artifact(f"{WANDB_ENTITY}/{WANDB_PROJECT}/normalized:latest")
-    artifact.download(str(out))
+    artifact.download(str(NORMALIZED_DIR))
     print("normalized:", artifact.version)
 
 

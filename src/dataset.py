@@ -9,13 +9,15 @@ import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset, Sampler
 
-from src.config import DATA_DIR, EVAL_SETS, Config
+from src.config import Config
+from src.project import DATA_DIR, NORMALIZED_DIR
 from src.tags import I, O, spans_to_tags
 from src.text import parse_spans, tokenize
 from src.vocab import PAD, UNK, build_vocab
 
-NORMALIZED_DIR = DATA_DIR / "normalized"
 IGNORE = -100
+EVAL_SETS = ("val", "sample")    # scored every epoch; the order of val_dataloader
+SPLITS = (*EVAL_SETS, "test")  # what load_eval returns and inference predicts
 
 
 @dataclass
@@ -130,14 +132,14 @@ class NERDataModule(L.LightningDataModule):
         if self.examples is not None:
             return
         rows, self.test_ids, self.val_lang = load_eval()
-        rows = {"train": load_train(self.cfg.train_size, self.cfg.seed), **rows}
-        self.vocab = build_vocab(self.cfg, rows)
+        rows = {"train": load_train(self.cfg.data.train_size, self.cfg.seed), **rows}
+        self.vocab = build_vocab(self.cfg.vocab, rows)
         self.vectors = self.vocab.vectors
         self.examples = {name: build_examples(r, self.vocab) for name, r in rows.items()}
 
     def loader(self, name, shuffle=False):
         examples = self.examples[name]
-        size = self.cfg.batch_size if shuffle else self.cfg.eval_batch_size
+        size = self.cfg.data.batch_size if shuffle else self.cfg.data.eval_batch_size
         sampler = BucketSampler([len(ex.ids) for ex in examples], size, shuffle)
         return DataLoader(NERDataset(examples), batch_sampler=sampler, collate_fn=collate)
 

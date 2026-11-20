@@ -5,10 +5,12 @@ from collections import Counter
 
 import numpy as np
 
-from src.config import EMBEDDINGS_DIR
+from src.config import VocabConfig
+from src.project import EMBEDDINGS_DIR
 
 FASTTEXT_URL = "https://dl.fbaipublicfiles.com/fasttext/vectors-crawl/cc.uk.300.vec.gz"
 PAD, UNK = 0, 1
+EMBEDDING_DIM = 300   # cc.uk.300 and the BPEmb we load
 
 
 def fasttext_vectors():
@@ -40,7 +42,7 @@ class FastTextVocab:
 
     def __init__(self, words, vectors=None):
         self.words = words
-        self.vectors = np.zeros((len(words) + 2, 300), dtype=np.float32) if vectors is None else vectors
+        self.vectors = np.zeros((len(words) + 2, EMBEDDING_DIM), dtype=np.float32) if vectors is None else vectors
 
     def encode(self, word):
         return [self.words.get(word, UNK)]
@@ -76,8 +78,8 @@ class BpeVocab:
     def __init__(self, vocab_size):
         from bpemb import BPEmb
 
-        self.bpemb = BPEmb(lang="uk", vs=vocab_size, dim=300, cache_dir=EMBEDDINGS_DIR)
-        self.vectors = np.vstack([np.zeros((1, 300)), self.bpemb.vectors]).astype(np.float32)
+        self.bpemb = BPEmb(lang="uk", vs=vocab_size, dim=EMBEDDING_DIM, cache_dir=EMBEDDINGS_DIR)
+        self.vectors = np.vstack([np.zeros((1, EMBEDDING_DIM)), self.bpemb.vectors]).astype(np.float32)
 
     def encode(self, word):
         return [i + 1 for i in self.bpemb.encode_ids(word)]
@@ -90,7 +92,7 @@ class NoVocab:
         return [UNK]
 
 
-def build_vocab(cfg, splits):
+def build_vocab(cfg: VocabConfig, splits):
     if cfg.embedding == "fasttext":
         return fasttext_vocab(splits, cfg.min_freq)
     if cfg.embedding == "bpemb":
@@ -100,7 +102,7 @@ def build_vocab(cfg, splits):
     raise ValueError(f"unknown embedding: {cfg.embedding}")
 
 
-def saved_vocab(cfg, words):
+def saved_vocab(cfg: VocabConfig, words):
     """The vocabulary of a checkpoint: its fastText words, or rebuilt from the config."""
     if cfg.embedding == "fasttext":
         return FastTextVocab(words)

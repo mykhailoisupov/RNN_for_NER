@@ -12,11 +12,11 @@ import argparse
 
 import pandas as pd
 
-from src.config import SUBMISSION_DIR
 from src.ensemble import ensemble_probs, eval_examples
 from src.inference import load_probs
 from src.label_policy import POLICY
 from src.metric import bootstrap_delta, counts_per_post, precision_recall_f1
+from src.project import SUBMISSION_DIR
 from src.submission import SPAN_REPAIRS, answers
 
 BASE = "rampart"

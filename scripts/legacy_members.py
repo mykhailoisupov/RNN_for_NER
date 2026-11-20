@@ -10,10 +10,11 @@ from pathlib import Path
 
 import torch
 
-from src.config import MODELS_DIR, Config
-from src.dataset import build_examples, load_eval, load_train
-from src.inference import SPLITS, predict_probs, save_probs
+from src.config import Config, DataConfig, VocabConfig
+from src.dataset import SPLITS, build_examples, load_eval, load_train
+from src.inference import predict_probs, save_probs
 from src.model import TaggerModule
+from src.project import MODELS_DIR
 from src.vocab import FastTextVocab, NoVocab, fasttext_vocab
 
 OUT = MODELS_DIR / "ensemble-probs-w256o64"
@@ -31,13 +32,13 @@ MEMBERS = {
 
 def load_member(run, eval_rows):
     path, embedding, saved = MEMBERS[run]
-    cfg = Config(embedding=embedding, train_size=0)
+    cfg = Config(vocab=VocabConfig(embedding=embedding), data=DataConfig(train_size=0))
     if embedding != "fasttext":
         vocab = NoVocab()
     elif saved is not None:
         vocab = FastTextVocab(json.loads(saved.read_text(encoding="utf-8")))
     else:
-        vocab = fasttext_vocab({"train": load_train(0, cfg.seed), **eval_rows}, cfg.min_freq)
+        vocab = fasttext_vocab({"train": load_train(0, cfg.seed), **eval_rows}, cfg.vocab.min_freq)
     state = torch.load(MODELS_DIR / path, map_location="cpu", weights_only=False)["state_dict"]
     if vocab.vectors is not None:
         rows = state["model.embedder.embedding.weight"].shape[0]
@@ -54,7 +55,7 @@ def main(members, out):
         model, vocab = load_member(run, eval_rows)
         # Flair's character LM fills MPS memory (a new graph per sequence length): CPU, 8 posts per batch.
         flair = MEMBERS[run][1] == "flair"
-        on, batch_size = (torch.device("cpu"), 8) if flair else (None, model.cfg.eval_batch_size)
+        on, batch_size = (torch.device("cpu"), 8) if flair else (None, model.cfg.data.eval_batch_size)
         save_probs(out / f"{run}.npz", {split: predict_probs(model, build_examples(eval_rows[split], vocab), batch_size, on=on)
                                         for split in SPLITS})
         print("written", out / f"{run}.npz", flush=True)

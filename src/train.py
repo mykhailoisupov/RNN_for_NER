@@ -7,25 +7,33 @@ import wandb
 from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
 
-from src.config import EVAL_SETS, MODELS_DIR, SUBMISSION_DIR, WANDB_ENTITY, WANDB_PROJECT, Config
-from src.dataset import NERDataModule
-from src.inference import SPLITS, load_model, predict_probs, save_probs
+from src.config import Config
+from src.dataset import EVAL_SETS, SPLITS, NERDataModule
+from src.inference import load_model, predict_probs, save_probs
 from src.metric import counts_per_post, hard_processing, precision_recall_f1
 from src.model import TaggerModule
+from src.project import MODELS_DIR, SUBMISSION_DIR, WANDB_ENTITY, WANDB_PROJECT
 from src.submission import answers, write_submission
 
 NAME_SKIP = {"embedding", "rnn", "bidirectional", "name", "wandb_mode", "accelerator"}
 
 
+def dotted_fields(cfg: Config):
+    """(`model.hidden_size`, value) for every field of the Config and of its groups: the CLI flags and run names."""
+    for key, value in dataclasses.asdict(cfg).items():
+        if isinstance(value, dict):
+            yield from ((f"{key}.{k}", v) for k, v in value.items())
+        else:
+            yield key, value
+
+
 def run_name(cfg: Config):
     if cfg.name:
         return cfg.name
-    base = f"{cfg.embedding}-{'bi' if cfg.bidirectional else ''}{cfg.rnn}"
-    changes = [
-        f"{f.name}={getattr(cfg, f.name)}"
-        for f in dataclasses.fields(cfg)
-        if f.name not in NAME_SKIP and getattr(cfg, f.name) != f.default
-    ]
+    base = f"{cfg.vocab.embedding}-{'bi' if cfg.model.bidirectional else ''}{cfg.model.rnn}"
+    default = dict(dotted_fields(Config()))
+    changes = [f"{key.split('.')[-1]}={value}" for key, value in dotted_fields(cfg)
+               if key.split(".")[-1] not in NAME_SKIP and value != default[key]]
     return "-".join([base, *changes])
 
 
@@ -113,13 +121,13 @@ def run(cfg: Config):
         accelerator=cfg.accelerator,
         logger=logger,
         callbacks=callbacks,
-        gradient_clip_val=cfg.grad_clip,
+        gradient_clip_val=cfg.optim.grad_clip,
         log_every_n_steps=50,
     )
     trainer.fit(model, datamodule=data)
 
     model, _ = load_model(checkpoint.best_model_path)
-    word = {split: predict_probs(model, data.examples[split], cfg.eval_batch_size) for split in SPLITS}
+    word = {split: predict_probs(model, data.examples[split], cfg.data.eval_batch_size) for split in SPLITS}
     probs = run_dir / "probs.npz"
     save_probs(probs, word)
     test = list(zip(data.examples["test"], word["test"]))
@@ -148,14 +156,16 @@ def run(cfg: Config):
 
 
 def parse_args():
+    """`--epochs 10`, `--model.hidden_size 512`: one flag per field."""
     parser = argparse.ArgumentParser()
-    for field in dataclasses.fields(Config):
-        kind = type(field.default)
-        if kind is bool:
-            parser.add_argument(f"--{field.name}", type=lambda v: v.lower() in {"1", "true", "yes"}, default=field.default)
-        else:
-            parser.add_argument(f"--{field.name}", type=kind, default=field.default)
-    return Config(**vars(parser.parse_args()))
+    for key, default in dotted_fields(Config()):
+        kind = (lambda v: v.lower() in {"1", "true", "yes"}) if isinstance(default, bool) else type(default)
+        parser.add_argument(f"--{key}", type=kind, default=default)
+    cfg = Config()
+    for key, value in vars(parser.parse_args()).items():
+        *group, name = key.split(".")
+        setattr(getattr(cfg, group[0]) if group else cfg, name, value)
+    return cfg
 
 
 if __name__ == "__main__":

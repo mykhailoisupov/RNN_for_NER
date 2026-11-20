@@ -6,7 +6,7 @@ from collections import Counter, defaultdict
 import numpy as np
 import pandas as pd
 
-from scripts.build_dataset import STREET
+from src.corpus import STREET
 
 
 def comparison_text(text):

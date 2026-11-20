@@ -1,4 +1,3 @@
-import dataclasses
 from functools import partial
 
 import lightning as L
@@ -8,8 +7,8 @@ from torch import nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from torch.optim.lr_scheduler import CosineAnnealingLR, OneCycleLR, ReduceLROnPlateau
 
-from src.config import EVAL_SETS, Config
-from src.dataset import IGNORE
+from src.config import Config, ModelConfig, VocabConfig
+from src.dataset import EVAL_SETS, IGNORE
 from src.vocab import PAD
 from src.tags import TAGS
 
@@ -23,20 +22,20 @@ OPTIMIZERS = {
 }
 
 
-def build_embedder(vectors, cfg: Config):
+def build_embedder(vectors, cfg: VocabConfig):
     if cfg.embedding in ("fasttext", "bpemb"):
-        return LookupEmbedder(vectors, cfg)
+        return LookupEmbedder(vectors, cfg.freeze_embeddings)
     if cfg.embedding == "flair":
-        return FlairEmbedder(cfg)
+        return FlairEmbedder()
     raise ValueError(f"unknown embedding: {cfg.embedding}")
 
 
 class Tagger(nn.Module):
     def __init__(self, vectors, cfg: Config):
         super().__init__()
-        self.embedder = build_embedder(vectors, cfg)
-        self.encoder = RNNEncoder(self.embedder.output_dim, cfg)
-        self.dropout = nn.Dropout(cfg.dropout)
+        self.embedder = build_embedder(vectors, cfg.vocab)
+        self.encoder = RNNEncoder(self.embedder.output_dim, cfg.model)
+        self.dropout = nn.Dropout(cfg.model.dropout)
         self.head = nn.Linear(self.encoder.output_dim, len(TAGS))
 
     def forward(self, batch):
@@ -46,10 +45,10 @@ class Tagger(nn.Module):
 
 
 class LookupEmbedder(nn.Module):
-    def __init__(self, vectors, cfg: Config):
+    def __init__(self, vectors, freeze):
         super().__init__()
         self.embedding = nn.Embedding.from_pretrained(
-            torch.as_tensor(vectors), freeze=cfg.freeze_embeddings, padding_idx=PAD
+            torch.as_tensor(vectors), freeze=freeze, padding_idx=PAD
         )
         self.output_dim = vectors.shape[1]
 
@@ -58,7 +57,7 @@ class LookupEmbedder(nn.Module):
 
 
 class RNNEncoder(nn.Module):
-    def __init__(self, input_dim, cfg: Config):
+    def __init__(self, input_dim, cfg: ModelConfig):
         super().__init__()
         self.rnn = RNNS[cfg.rnn](
             input_dim,
@@ -107,29 +106,30 @@ class TaggerModule(L.LightningModule):
         return logits.float().softmax(-1)
 
     def on_save_checkpoint(self, checkpoint):
-        checkpoint["config"] = dataclasses.asdict(self.cfg)
+        checkpoint["config"] = self.cfg
         checkpoint["vocab"] = self.vocab_words
 
     def configure_optimizers(self):
         params = [p for p in self.parameters() if p.requires_grad]
-        optimizer = OPTIMIZERS[self.cfg.optimizer](params, lr=self.cfg.lr, weight_decay=self.cfg.weight_decay)
-        if self.cfg.scheduler == "none":
+        opt = self.cfg.optim
+        optimizer = OPTIMIZERS[opt.optimizer](params, lr=opt.lr, weight_decay=opt.weight_decay)
+        if opt.scheduler == "none":
             return optimizer
-        if self.cfg.scheduler == "plateau":
+        if opt.scheduler == "plateau":
             scheduler = ReduceLROnPlateau(optimizer, mode="max", factor=0.5, patience=1)
             return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "monitor": self.cfg.monitor}}
         steps = self.trainer.estimated_stepping_batches
-        if self.cfg.scheduler == "cosine":
+        if opt.scheduler == "cosine":
             scheduler = CosineAnnealingLR(optimizer, T_max=steps)
-        elif self.cfg.scheduler == "onecycle":
-            scheduler = OneCycleLR(optimizer, max_lr=self.cfg.lr, total_steps=steps)
+        elif opt.scheduler == "onecycle":
+            scheduler = OneCycleLR(optimizer, max_lr=opt.lr, total_steps=steps)
         else:
-            raise ValueError(f"unknown scheduler: {self.cfg.scheduler}")
+            raise ValueError(f"unknown scheduler: {opt.scheduler}")
         return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "step"}}
 
 
 class FlairEmbedder(nn.Module):
-    def __init__(self, cfg: Config):
+    def __init__(self):
         super().__init__()
         from flair.embeddings import FlairEmbeddings
         from huggingface_hub import hf_hub_download

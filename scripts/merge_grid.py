@@ -12,12 +12,29 @@ import pandas as pd
 
 from src.config import SUBMISSION_DIR
 from src.data import post_counts, predicted_locations, prf
-from src.ensemble import (argmax_tags, average, decode, eval_examples, load_probs, merge_adjacent,
-                          strict, write_submission)
+from src.ensemble import average, decode, eval_examples, load_probs, write_submission
 from src.postprocess import test_policy
 from src.rampart import EXTEND_SCORE, MIN_SCORE, rampart_tags
 
 BASE = "viterbi"
+
+
+def argmax_tags(rows):
+    """Each word on its own: `B O I` holes and I without B are possible."""
+    return [r.argmax(1).tolist() for r in rows]
+
+
+def strict(tags):
+    """I with no B/I before it becomes O (strict IOB2)."""
+    out = []
+    for tag in tags:
+        out.append(0 if tag == 2 and (not out or out[-1] == 0) else tag)
+    return out
+
+
+def merge_adjacent(tags):
+    """B right after a name continues it: `B B` -> `B I`."""
+    return [2 if tag == 1 and k and tags[k - 1] != 0 else tag for k, tag in enumerate(tags)]
 
 
 def bootstrap_delta(base, new, n=1000, seed=0):

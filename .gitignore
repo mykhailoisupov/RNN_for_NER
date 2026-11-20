@@ -10,7 +10,6 @@ __pycache__/
 !/models/.gitkeep
 submission/
 /results/*
-!/data/folds.csv
 .env
 .DS_Store
 wandb/

@@ -6,20 +6,11 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "bpemb>=0.3.6",
-    "datasketch>=2.0,<3",
     "lightning>=2.6.6",
-    "lingua-language-detector>=2,<3",
-    "matplotlib>=3.11.2",
     "numpy>=2.4.6",
-    "optuna>=5.0.0",
     "pandas>=3.1.1",
     "pyarrow>=26.0.1",
-    "scikit-learn>=1.9.1",
-    "seqeval>=1.2.2",
-    "tokenizers>=0.22",
     "torch>=2.15.0",
-    "torchmetrics>=1.9.0",
-    "tqdm>=4.70.1",
     "wandb>=0.31.0",
 ]
 
@@ -32,5 +23,10 @@ flair = [
 dev = [
     "ipykernel>=7.4.0",
     "kaggle>=2.2.5",
-    "six>=1.17.0",
+]
+eda = [
+    "datasketch>=2.0,<3",
+    "lingua-language-detector>=2,<3",
+    "matplotlib>=3.11.2",
+    "scikit-learn>=1.9.1",
 ]

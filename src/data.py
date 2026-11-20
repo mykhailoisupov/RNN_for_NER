@@ -12,7 +12,6 @@ import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset, Sampler
 
-from src.augment import add_addresses
 from src.config import DATA_DIR, EMBEDDINGS_DIR, EVAL_SETS, TAGS, Config
 from src.postprocess import hard_processing, to_submission
 from src.text import parse_spans, prepare, tokenize
@@ -73,14 +72,11 @@ def comp_metric(y_true: List[List[str]], y_pred: List[List[str]]):
     return tuple(round(float(x), 8) for x in prf(post_counts(y_true, y_pred).sum(0)))
 
 
-def load_splits(train_size, seed, address_share=0.0):
+def load_splits(train_size, seed):
     """train/val: posts from scripts/build_dataset.py; sample/test: raw competition files."""
     train = pd.read_parquet(NORMALIZED_DIR / "train.parquet", columns=["text", "spans"])
     if train_size:
         train = train.sample(min(train_size, len(train)), random_state=seed)
-    if address_share:
-        texts, spans = add_addresses(train["text"].tolist(), train["spans"].tolist(), address_share, seed)
-        train = pd.DataFrame({"text": texts, "spans": spans})
     val = pd.read_parquet(NORMALIZED_DIR / "val.parquet", columns=["text", "spans"])
     sample = pd.read_csv(DATA_DIR / "labeling_sample.csv")
     test = pd.read_csv(DATA_DIR / "test.csv")
@@ -265,7 +261,7 @@ class NERDataModule(L.LightningDataModule):
     def setup(self, stage=None):
         if self.examples is not None:
             return
-        splits, self.test_ids = load_splits(self.cfg.train_size, self.cfg.seed, self.cfg.address_share)
+        splits, self.test_ids = load_splits(self.cfg.train_size, self.cfg.seed)
         encoder = build_encoder(self.cfg, splits)
         self.vectors = encoder.vectors
         self.examples = {name: encode(rows, encoder) for name, rows in splits.items()}

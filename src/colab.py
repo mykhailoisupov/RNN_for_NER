@@ -74,8 +74,6 @@ def download_data():
     if not missing:
         print("data: ok")
         return
-    if not KAGGLE_COMPETITION:
-        raise RuntimeError("set KAGGLE_COMPETITION in src/config.py or put the files into data/ manually")
     token = os.environ.get("KAGGLE_API_TOKEN") or colab_secret("KAGGLE_API_TOKEN")
     if token:
         os.environ["KAGGLE_API_TOKEN"] = token

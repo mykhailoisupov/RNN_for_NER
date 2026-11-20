@@ -20,7 +20,6 @@ class Config:
     embedding: str = "fasttext"
     bpe_vocab_size: int = 50000
     train_size: int = 200_000
-    address_share: float = 0.0
     min_freq: int = 2
     freeze_embeddings: bool = True
     rnn: str = "lstm"

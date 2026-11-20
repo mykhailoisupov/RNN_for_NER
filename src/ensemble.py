@@ -62,24 +62,6 @@ def decode(rows):
     return [viterbi(torch.log(torch.tensor(r).clamp_min(1e-9))[None], torch.tensor([len(r)]))[0] if len(r) else [] for r in rows]
 
 
-def argmax_tags(rows):
-    """Each word on its own: `B O I` holes and I without B are possible."""
-    return [r.argmax(1).tolist() for r in rows]
-
-
-def strict(tags):
-    """I with no B/I before it becomes O (strict IOB2)."""
-    out = []
-    for tag in tags:
-        out.append(0 if tag == 2 and (not out or out[-1] == 0) else tag)
-    return out
-
-
-def merge_adjacent(tags):
-    """B right after a name continues it: `B B` -> `B I`."""
-    return [2 if tag == 1 and k and tags[k - 1] != 0 else tag for k, tag in enumerate(tags)]
-
-
 def eval_examples():
     splits, test_ids = load_splits(train_size=1, seed=0)
     return {split: encode(splits[split], WordEncoder()) for split in SPLITS}, test_ids

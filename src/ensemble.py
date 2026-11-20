@@ -25,15 +25,27 @@ def eval_examples():
     return {split: build_examples(rows[split], NoVocab()) for split in SPLITS}, test_ids
 
 
+def ensemble_probs(members, weights, examples):
+    """Weighted average per split; a split is skipped when some .npz were made on other posts
+    (val changes with every build_dataset). test.csv never changes, so test must match."""
+    probs = {}
+    for split in SPLITS:
+        want = [len(ex.word_starts) for ex in examples[split]]
+        if all(split in m and [len(r) for r in m[split]] == want for m in members):
+            probs[split] = average(members, weights, split)
+        else:
+            print(f"{split}: skipped, .npz made on other data")
+    assert "test" in probs, "test probs do not match test.csv"
+    return probs
+
+
 def run(paths, weights, name):
     members = [load_probs(p) for p in paths]
     examples, test_ids = eval_examples()
-    probs = {split: average(members, weights, split) for split in SPLITS if all(split in m for m in members)}
-    for split, rows in probs.items():
-        assert [len(r) for r in rows] == [len(ex.word_starts) for ex in examples[split]], f"{split}: probs do not match local data"
+    probs = ensemble_probs(members, weights, examples)
 
     row = {}
-    for split in ("val", "sample"):
+    for split in [s for s in ("val", "sample") if s in probs]:
         pred = [answers(ex, p, policy=[]) for ex, p in zip(examples[split], probs[split])]
         c = counts_per_post([ex.locations for ex in examples[split]], pred)
         row.update(zip((f"{split}_p", f"{split}_r", f"{split}_f1"), map(float, precision_recall_f1(c.sum(0)))))

@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src.augment import add_name_lines
+from src.augment import add_caps, add_name_lines
 from src.label_policy import (CAPITAL, HOUSE, LOWERABLE, REGION_ADJ, STREET_ANY, in_org_name, is_common_noun,
                               settlement_start, trim)
 from src.tags import aligned
@@ -27,6 +27,8 @@ RU_SHARE, VAL_RU_SHARE = 0.20, 0.08
 VAL_PCT, VAL_PCT_RARE = 5, 20             # % of uk sentences sent to val: ordinary / with Kyiv or a street
 UPSAMPLE_KYIV, UPSAMPLE_STREET = 4, 4
 HOUSE_NUMBER_P = 0.5
+CAPS_LINE_SHARE, CAPS_WORD_SHARE = 0.07, 0.11   # posts offered a short line / one plain word in capitals; the profile
+                                                 # rows `caps line`, `caps words / 1000` then match test
 NAME_LINES_SHARE = 0.03                   # posts with names that get a list/heading of bare names: ~0.05 a post, as test
 RARE_MIN, RARE_SHARE = 50, 0.03           # a form seen 50+ times and labelled in < 3% of them is not a place
 N_FOLDS = 5
@@ -40,7 +42,8 @@ TARGET_WORDS = np.array([0.220, 0.239, 0.245, 0.201, 0.094])
 TARGET_EMPTY = np.array([0.4286, 0.2281, 0.2393, 0.1667, 0.1556])
 TARGET_PROFILE = {"names 0": 25.6, "names 1": 35.6, "names 2": 20.3, "names 3-4": 11.9, "names 5+": 6.5,
                   **{f"words {n}": 100 * p for n, p in zip(BIN_NAMES, TARGET_WORDS)},
-                  "kyiv": 41.1, "street": 9.6, "multiline": 85.0, "median words": 36, "ru": 8.0}
+                  "kyiv": 41.1, "street": 9.6, "multiline": 85.0, "median words": 36,
+                  "caps line": 1.7, "caps words / 1000": 6.0, "ru": 8.0}
 
 STATS = Counter()
 
@@ -53,6 +56,12 @@ PROBES = {
 WORD = re.compile(r"\w+(?:['-]\w+)*")
 FORM = re.compile(r"(?<![\w'’ʼ-])[А-ЯІЇЄҐA-Z][\w'’ʼ]+(?![\w'’ʼ-])")   # one capitalised word
 KYIV_MENTION = re.compile(r"київ|києв|киев", re.I)
+CAPS_WORD = re.compile(r"(?<!\w)[A-ZА-ЯІЇЄҐЁ]{4,}(?!\w)")
+
+
+def caps_line(text):
+    """Has the post a line of 8+ letters with no lowercase one?"""
+    return any(sum(c.isalpha() for c in line) >= 8 and line == line.upper() for line in text.split("\n"))
 
 
 def clean_spans(text, spans):
@@ -361,6 +370,8 @@ def profile(posts):
             **{f"words {n}": 100 * w for n, w in zip(BIN_NAMES, words)},
             "kyiv": 100 * f.kyiv.mean(), "street": 100 * f.street.mean(),
             "multiline": 100 * posts.text.str.contains("\n").mean(), "median words": f.words.median(),
+            "caps line": 100 * posts.text.map(caps_line).mean(),
+            "caps words / 1000": 1000 * posts.text.str.count(CAPS_WORD.pattern).sum() / f.words.sum(),
             "ru": 100 * posts.lang.eq("ru").mean(), "posts": len(posts)}
 
 
@@ -399,6 +410,7 @@ def build(rebuild=False, ru_share=RU_SHARE, seed=0):
             posts = pd.concat(folds, ignore_index=True)
             # Test has lists and headings of bare names (`Чорнобиль - 19`); names come from this split only.
             texts, spans = add_name_lines(posts.text.tolist(), posts.spans.tolist(), NAME_LINES_SHARE, seed)
+            texts = add_caps(texts, spans, CAPS_LINE_SHARE, CAPS_WORD_SHARE, seed)
             parts[lang] = posts.assign(text=texts, spans=spans)
             _report(f"{split} {lang}: removal of data without names")
         wanted_ru = round(len(parts["uk"]) * share / (1 - share))

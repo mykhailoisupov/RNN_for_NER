@@ -1,19 +1,22 @@
-"""Ablations of the answers path on saved ensemble probabilities: without rampart, without each span repair.
+"""Ablations of the answers path on saved ensemble probabilities: without rampart, without each span repair,
+without each test-policy step.
 
     python -m scripts.compare_decoders models/ensemble-probs-w256o64/*.npz   # writes submission/compare_decoders.csv
 
 Val decides, sample is a check; every row is compared with the submission path (rampart + all repairs) by a paired
-bootstrap on val. argmax, BIO repair rules and rampart's threshold grid lost to this path in 661b9dc.
+bootstrap on val (on sample when the .npz predate the current val). `test_changed` is the number of test posts a
+step changes: 0 means the step is dead weight for these models. argmax, BIO repair rules and rampart's threshold grid
+lost to this path in 661b9dc.
 """
 import argparse
 
 import pandas as pd
 
 from src.config import SUBMISSION_DIR
-from src.ensemble import average, eval_examples
+from src.ensemble import ensemble_probs, eval_examples
 from src.inference import load_probs
 from src.metric import bootstrap_delta, counts_per_post, precision_recall_f1
-from src.submission import SPAN_REPAIRS, answers
+from src.submission import SPAN_REPAIRS, TEST_POLICY, answers
 
 BASE = "rampart"
 CONFIGS = {
@@ -21,25 +24,35 @@ CONFIGS = {
     "viterbi without rampart": {"rampart": False},
     **{f"rampart -{r.__name__}": {"repairs": [x for x in SPAN_REPAIRS if x is not r]} for r in SPAN_REPAIRS},
 }
+#  val and sample are labelled without the test policy, so its steps have no score there: only test_changed
+POLICY_CONFIGS = {f"rampart -{r.__name__}": {"policy": [x for x in TEST_POLICY if x is not r]} for r in TEST_POLICY}
 
 
 def main(paths):
     members = [load_probs(p) for p in paths]
     examples, _ = eval_examples()
-    probs = {split: average(members, [1.0] * len(members), split) for split in ("val", "sample")}
+    probs = ensemble_probs(members, [1.0] * len(members), examples)
+    scored = [s for s in ("val", "sample") if s in probs]   # val is gone when the .npz predate the current val
+    test = list(zip(examples["test"], probs["test"]))
+    base_test = [set(answers(ex, p)) for ex, p in test]
+
+    def test_changed(kw):
+        return sum(set(answers(ex, p, **kw)) != b for (ex, p), b in zip(test, base_test))
+
     rows, counts = [], {}
     for label, kw in CONFIGS.items():
         row = {"config": label}
-        for split in ("val", "sample"):
+        for split in scored:
             pred = [answers(ex, p, policy=[], **kw) for ex, p in zip(examples[split], probs[split])]
             c = counts_per_post([ex.locations for ex in examples[split]], pred)
             row.update(zip((f"{split}_p", f"{split}_r", f"{split}_f1"), map(float, precision_recall_f1(c.sum(0)))))
-            if split == "val":
+            if split == scored[0]:
                 counts[label] = c
         low, high = bootstrap_delta(counts[BASE], counts[label])
-        row.update(val_delta_low=low, val_delta_high=high)
+        row.update(delta_low=low, delta_high=high, test_changed=test_changed(kw))
         rows.append(row)
-        print(" | ".join(f"{v:+.4f}" if isinstance(v, float) else v for v in row.values()), flush=True)
+        print(" | ".join(f"{v:+.4f}" if isinstance(v, float) else str(v) for v in row.values()), flush=True)
+    rows += [{"config": label, "test_changed": test_changed(kw)} for label, kw in POLICY_CONFIGS.items()]
     table = pd.DataFrame(rows)
     SUBMISSION_DIR.mkdir(exist_ok=True)
     table.to_csv(SUBMISSION_DIR / "compare_decoders.csv", index=False)

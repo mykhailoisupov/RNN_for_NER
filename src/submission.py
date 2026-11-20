@@ -11,19 +11,18 @@ import pandas as pd
 
 from src.decoding import decode
 from src.label_policy import (CAPITAL, HOUSE, HOUSE_REST, STREET, STREET_ANY, STREET_FORM, STREET_LEFT, in_org_name,
-                              is_common_noun, settlement_start, trim)
+                              settlement_start, trim)
 from src.metric import hard_processing
 from src.tags import tags_to_spans
 from src.text import prepare
 
 
 # --- span repairs: (text, spans) -> spans --------------------------------------------------------------------
-def split_at_brackets(text, spans):
-    """A round bracket is never inside a name: `Левицького 18а (Курчатова` -> `Левицького 18а` + `Курчатова`."""
-    prepared = prepare(text)
+def split_at_newlines(text, spans):
+    """A name never runs over a line break: rampart joins `Межовій\\n\\nКиївщина`, two lines of a list."""
     out = []
     for a, b in spans:
-        cuts = [k for k in range(a, b) if prepared[k] in "()"]
+        cuts = [k for k in range(a, b) if text[k] == "\n"]
         out += [(c, d) for c, d in zip([a] + [k + 1 for k in cuts], cuts + [b]) if c < d]
     return out
 
@@ -32,11 +31,12 @@ def trim_edges(text, spans):
     return [trim(text, a, b) for a, b in spans]
 
 
-def drop_common_nouns(text, spans):
-    return [(a, b) for a, b in spans if not is_common_noun(text[a:b])]
+def drop_hashtags(text, spans):
+    """A hashtag is not a mention (`#ПротасівЯр`). prepare() blanks the `#`, so the original text is checked."""
+    return [(a, b) for a, b in spans if not re.search(r"#\w*$", text[:a])]
 
 
-SPAN_REPAIRS = [split_at_brackets, trim_edges, drop_common_nouns]
+SPAN_REPAIRS = [split_at_newlines, trim_edges, drop_hashtags]
 
 
 # --- test policy: (text, answers) -> answers, only for the submission ----------------------------------------

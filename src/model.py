@@ -8,7 +8,8 @@ from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from torch.optim.lr_scheduler import CosineAnnealingLR, OneCycleLR, ReduceLROnPlateau
 
 from src.config import EVAL_SETS, Config
-from src.data import IGNORE, PAD, score
+from src.dataset import IGNORE, score
+from src.vocab import PAD
 from src.tags import TAGS
 
 

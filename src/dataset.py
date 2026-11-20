@@ -1,0 +1,163 @@
+"""Files -> Example -> batches: train/val built by build_dataset, sample/test as the competition gives them."""
+import random
+from dataclasses import dataclass
+
+import lightning as L
+import numpy as np
+import pandas as pd
+import torch
+from torch.nn.utils.rnn import pad_sequence
+from torch.utils.data import DataLoader, Dataset, Sampler
+
+from src.config import DATA_DIR, EVAL_SETS, Config
+from src.metric import counts_per_post, precision_recall_f1
+from src.submission import answers
+from src.tags import I, O, spans_to_tags
+from src.text import parse_spans, tokenize
+from src.vocab import PAD, UNK, build_vocab
+
+NORMALIZED_DIR = DATA_DIR / "normalized"
+IGNORE = -100
+
+
+@dataclass
+class Example:
+    text: str
+    tokens: list
+    locations: list
+    ids: list
+    labels: list
+    word_starts: list
+
+
+def _rows(texts, spans):
+    return [(text, tokenize(text), [(int(a), int(b)) for a, b in s]) for text, s in zip(texts, spans)]
+
+
+def load_train(train_size, seed):
+    """Posts from build_dataset; train_size 0 is all of them."""
+    train = pd.read_parquet(NORMALIZED_DIR / "train.parquet", columns=["text", "spans"])
+    if train_size:
+        train = train.sample(min(train_size, len(train)), random_state=seed)
+    return _rows(train["text"], train["spans"])
+
+
+def load_eval():
+    """val from build_dataset, sample and test as the competition gives them; also the test ids."""
+    val = pd.read_parquet(NORMALIZED_DIR / "val.parquet", columns=["text", "spans"])
+    sample = pd.read_csv(DATA_DIR / "labeling_sample.csv")
+    test = pd.read_csv(DATA_DIR / "test.csv")
+    rows = {
+        "val": _rows(val["text"], val["spans"]),
+        "sample": _rows(sample["text"], sample["loc_markers"].map(parse_spans)),
+        "test": _rows(test["text"], [[]] * len(test)),
+    }
+    return rows, test["text_id"].tolist()
+
+
+def build_examples(rows, vocab):
+    cache, examples = {}, []
+    for text, tokens, spans in rows:
+        tags = spans_to_tags(tokens, spans)
+        ids, labels, word_starts = [], [], []
+        for token, tag in zip(tokens, tags):
+            if token.text not in cache:
+                cache[token.text] = vocab.encode(token.text) or [UNK]
+            pieces = cache[token.text]
+            word_starts.append(len(ids))
+            ids += pieces
+            labels += [tag] + [O if tag == O else I] * (len(pieces) - 1)
+        if not ids:
+            ids, labels = [UNK], [IGNORE]
+        locations = [text[a:b] for a, b in spans]
+        examples.append(Example(text, tokens, locations, ids, labels, word_starts))
+    return examples
+
+
+def score(examples, predictions):
+    """P/R/F1 of (index, word probabilities) pairs; the submission path without the test policy."""
+    y_true = [examples[i].locations for i, _ in predictions]
+    y_pred = [answers(examples[i], probs, policy=[]) for i, probs in predictions]
+    return dict(zip(("precision", "recall", "f1"), map(float, precision_recall_f1(counts_per_post(y_true, y_pred).sum(0)))))
+
+
+class NERDataset(Dataset):
+    def __init__(self, examples):
+        self.examples = examples
+
+    def __len__(self):
+        return len(self.examples)
+
+    def __getitem__(self, i):
+        example = self.examples[i]
+        words = [t.text for t in example.tokens]
+        return i, torch.tensor(example.ids), torch.tensor(example.labels), words
+
+
+class BucketSampler(Sampler):
+    def __init__(self, lengths, batch_size, shuffle, pool=100):
+        self.lengths = np.asarray(lengths)
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.pool = batch_size * pool if shuffle else len(lengths)
+
+    def __iter__(self):
+        order = np.random.permutation(len(self.lengths)) if self.shuffle else np.arange(len(self.lengths))
+        batches = []
+        for i in range(0, len(order), self.pool):
+            chunk = order[i:i + self.pool]
+            chunk = chunk[np.argsort(self.lengths[chunk], kind="stable")]
+            batches += [chunk[j:j + self.batch_size].tolist() for j in range(0, len(chunk), self.batch_size)]
+        if self.shuffle:
+            random.shuffle(batches)
+        return iter(batches)
+
+    def __len__(self):
+        full, rest = divmod(len(self.lengths), self.pool)
+        return full * -(-self.pool // self.batch_size) + -(-rest // self.batch_size)
+
+
+def collate(batch):
+    idx, ids, labels, words = zip(*batch)
+    return {
+        "idx": torch.tensor(idx),
+        "words": list(words),
+        "ids": pad_sequence(ids, batch_first=True, padding_value=PAD),
+        "labels": pad_sequence(labels, batch_first=True, padding_value=IGNORE),
+        "lengths": torch.tensor([len(x) for x in ids]),
+    }
+
+
+class NERDataModule(L.LightningDataModule):
+    def __init__(self, cfg: Config):
+        super().__init__()
+        self.cfg = cfg
+        self.examples = None
+
+    def setup(self, stage=None):
+        if self.examples is not None:
+            return
+        rows, self.test_ids = load_eval()
+        rows = {"train": load_train(self.cfg.train_size, self.cfg.seed), **rows}
+        self.vocab = build_vocab(self.cfg, rows)
+        self.vectors = self.vocab.vectors
+        self.examples = {name: build_examples(r, self.vocab) for name, r in rows.items()}
+
+    def oracle_f1(self):
+        return {
+            f"{name}/oracle_f1": score(self.examples[name], [(i, np.eye(3)[np.array(ex.labels)[ex.word_starts]])
+                                                             for i, ex in enumerate(self.examples[name])])["f1"]
+            for name in EVAL_SETS
+        }
+
+    def loader(self, name, shuffle=False):
+        examples = self.examples[name]
+        size = self.cfg.batch_size if shuffle else self.cfg.eval_batch_size
+        sampler = BucketSampler([len(ex.ids) for ex in examples], size, shuffle)
+        return DataLoader(NERDataset(examples), batch_sampler=sampler, collate_fn=collate)
+
+    def train_dataloader(self):
+        return self.loader("train", shuffle=True)
+
+    def val_dataloader(self):
+        return [self.loader(name) for name in EVAL_SETS]

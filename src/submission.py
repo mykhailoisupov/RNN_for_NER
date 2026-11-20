@@ -102,7 +102,7 @@ def answers(example, probs, rampart=True, repairs=SPAN_REPAIRS, policy=TEST_POLI
     """Word probabilities of one post -> its answers: tags, spans, repairs, strings, then the test policy.
     The metric compares sets, and an empty string counts as a false positive."""
     text = example.text
-    spans = tags_to_spans(example.words, decode(text, example.words, probs, rampart))
+    spans = tags_to_spans(example.tokens, decode(text, example.tokens, probs, rampart))
     for repair in repairs:
         spans = repair(text, spans)
     out = list(dict.fromkeys(s for s in (text[a:b] for a, b in spans) if hard_processing(s)))

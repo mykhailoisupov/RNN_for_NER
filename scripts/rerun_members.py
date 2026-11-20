@@ -16,7 +16,8 @@ import numpy as np
 import torch
 
 from src.config import MODELS_DIR, Config
-from src.data import UNK, Example, FastTextEncoder, WordEncoder, encode, load_splits
+from src.dataset import Example, build_examples, load_eval, load_train
+from src.vocab import FastTextVocab, NoVocab, fasttext_vocab
 from src.ensemble import SPLITS, load_probs, save_probs, word_probs
 from src.model import Tagger
 
@@ -24,7 +25,7 @@ WINDOW, OVERLAP = 256, 64   # a bit under the longest train post (352 words); ov
 OUT = MODELS_DIR / f"ensemble-probs-w{WINDOW}o{OVERLAP}"
 
 # run -> (checkpoint, embedding, saved fastText vocabulary or None to build it from today's data).
-# b1yzs79t predates the apostrophe lookup in FastTextEncoder (d1a6fa4), so today's code builds a different
+# b1yzs79t predates the apostrophe lookup in fasttext_vocab (d1a6fa4), so today's code builds a different
 # vocabulary; its vocab.json was built at its training commit 1da6a94 on normalized:v0 (473 127 rows, as the ckpt).
 MEMBERS = {
     "b1yzs79t": ("norm-fasttext-bilstm-train_size=0-epochs=10-patience=2-b1yzs79t/best.ckpt", "fasttext",
@@ -46,9 +47,9 @@ def windows(n, size, overlap):
 def window_examples(examples, size, overlap):
     subs, owners = [], []
     for i, ex in enumerate(examples):
-        assert ex.word_starts == list(range(len(ex.words))), "one model token per word"
-        for a, b in windows(len(ex.words), size, overlap):
-            subs.append(Example(ex.text, ex.words[a:b], [], ex.ids[a:b], ex.labels[a:b], list(range(b - a))))
+        assert ex.word_starts == list(range(len(ex.tokens))), "one model token per word"
+        for a, b in windows(len(ex.tokens), size, overlap):
+            subs.append(Example(ex.text, ex.tokens[a:b], [], ex.ids[a:b], ex.labels[a:b], list(range(b - a))))
             owners.append((i, a))
     return subs, owners
 
@@ -63,27 +64,15 @@ def merge_windows(examples, sub_probs, owners):
     return [s / np.maximum(c, 1)[:, None] for s, c in zip(sums, counts)]
 
 
-class SavedVocab:
-    """A fastText vocabulary saved as {word: row}; the vectors themselves come from the checkpoint."""
-    def __init__(self, vocab):
-        self.vocab = vocab
-        self.vectors = np.zeros((len(vocab) + 2, 300), dtype=np.float32)
-
-    def encode(self, word):
-        return [self.vocab.get(word, UNK)]
-
-
 def load_member(run, eval_rows):
     path, embedding, vocab = MEMBERS[run]
     cfg = Config(embedding=embedding, train_size=0)
     if embedding != "fasttext":
-        encoder = WordEncoder()
+        encoder = NoVocab()
     elif vocab is not None:
-        encoder = SavedVocab(json.loads(vocab.read_text(encoding="utf-8")))
+        encoder = FastTextVocab(json.loads(vocab.read_text(encoding="utf-8")))
     else:
-        splits, _ = load_splits(0, cfg.seed)
-        encoder = FastTextEncoder(splits, cfg.min_freq)
-        del splits
+        encoder = fasttext_vocab({"train": load_train(0, cfg.seed), **eval_rows}, cfg.min_freq)
     state = torch.load(MODELS_DIR / path, map_location="cpu", weights_only=False)["state_dict"]
     if encoder.vectors is not None:
         rows = state["model.embedder.embedding.weight"].shape[0]
@@ -92,11 +81,11 @@ def load_member(run, eval_rows):
     model.load_state_dict(state)
     # Flair's character LM on 64 of the longest posts needs ~30 GB on MPS; 8 posts per batch are enough on CPU.
     batch_size = cfg.eval_batch_size if embedding == "fasttext" else 8
-    return model, {split: encode(eval_rows[split], encoder) for split in SPLITS}, batch_size
+    return model, {split: build_examples(eval_rows[split], encoder) for split in SPLITS}, batch_size
 
 
 def main(members):
-    eval_rows, _ = load_splits(train_size=1, seed=0)
+    eval_rows, _ = load_eval()
     OUT.mkdir(exist_ok=True)
     for run in members:
         model, examples, batch_size = load_member(run, eval_rows)
@@ -112,7 +101,7 @@ def main(members):
         assert diff < 2e-2, f"{run}: does not reproduce the saved probabilities"
         probs = {}
         for split in SPLITS:   # posts no longer than the window are the same as whole
-            long = [i for i, ex in enumerate(examples[split]) if len(ex.words) > WINDOW]
+            long = [i for i, ex in enumerate(examples[split]) if len(ex.tokens) > WINDOW]
             subs, owners = window_examples([examples[split][i] for i in long], WINDOW, OVERLAP)
             sub_probs = word_probs(model, subs, batch_size, on) if subs else []   # sample has no long posts
             probs[split] = list(full[split])

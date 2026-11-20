@@ -7,7 +7,7 @@ from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, Mode
 from lightning.pytorch.loggers import WandbLogger
 
 from src.config import MODELS_DIR, SUBMISSION_DIR, WANDB_ENTITY, WANDB_PROJECT, Config
-from src.data import NERDataModule
+from src.dataset import NERDataModule
 from src.ensemble import SPLITS, save_probs, word_probs
 from src.model import Tagger
 from src.submission import answers, write_submission

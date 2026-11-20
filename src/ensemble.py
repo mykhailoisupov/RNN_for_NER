@@ -6,9 +6,10 @@ import torch
 from torch.utils.data import DataLoader
 
 from src.config import SUBMISSION_DIR
-from src.data import BucketSampler, NERDataset, WordEncoder, collate, encode, load_splits
+from src.dataset import BucketSampler, NERDataset, build_examples, collate, load_eval
 from src.metric import counts_per_post, precision_recall_f1
 from src.submission import answers, write_submission
+from src.vocab import NoVocab
 
 SPLITS = ("val", "sample", "test")
 
@@ -56,8 +57,8 @@ def average(members, weights, split):
 
 
 def eval_examples():
-    splits, test_ids = load_splits(train_size=1, seed=0)
-    return {split: encode(splits[split], WordEncoder()) for split in SPLITS}, test_ids
+    rows, test_ids = load_eval()
+    return {split: build_examples(rows[split], NoVocab()) for split in SPLITS}, test_ids
 
 
 def run(paths, weights, name):

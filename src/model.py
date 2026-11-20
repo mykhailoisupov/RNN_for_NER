@@ -1,3 +1,4 @@
+import dataclasses
 from functools import partial
 
 import lightning as L
@@ -8,7 +9,7 @@ from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from torch.optim.lr_scheduler import CosineAnnealingLR, OneCycleLR, ReduceLROnPlateau
 
 from src.config import EVAL_SETS, Config
-from src.dataset import IGNORE, score
+from src.dataset import IGNORE
 from src.vocab import PAD
 from src.tags import TAGS
 
@@ -24,13 +25,13 @@ OPTIMIZERS = {
 
 def build_embedder(vectors, cfg: Config):
     if cfg.embedding in ("fasttext", "bpemb"):
-        return FastTextEmbedder(vectors, cfg)
+        return LookupEmbedder(vectors, cfg)
     if cfg.embedding == "flair":
         return FlairEmbedder(cfg)
     raise ValueError(f"unknown embedding: {cfg.embedding}")
 
 
-class RNNTagger(nn.Module):
+class Tagger(nn.Module):
     def __init__(self, vectors, cfg: Config):
         super().__init__()
         self.embedder = build_embedder(vectors, cfg)
@@ -44,7 +45,7 @@ class RNNTagger(nn.Module):
         return self.head(self.dropout(out))
 
 
-class FastTextEmbedder(nn.Module):
+class LookupEmbedder(nn.Module):
     def __init__(self, vectors, cfg: Config):
         super().__init__()
         self.embedding = nn.Embedding.from_pretrained(
@@ -77,12 +78,15 @@ class RNNEncoder(nn.Module):
         return out
     
 
-class Tagger(L.LightningModule):
-    def __init__(self, cfg: Config, vectors):
+class TaggerModule(L.LightningModule):
+    """Training of the Tagger. A checkpoint also keeps the config and the fastText words, so src.inference.load_model
+    rebuilds the model without the data."""
+
+    def __init__(self, cfg: Config, vocab):
         super().__init__()
         self.cfg = cfg
-        self.model = RNNTagger(vectors, cfg)
-        self.outputs = {}
+        self.vocab_words = getattr(vocab, "words", None)
+        self.model = Tagger(vocab.vectors, cfg)
 
     def forward(self, batch):
         return self.model(batch)
@@ -95,21 +99,16 @@ class Tagger(L.LightningModule):
         self.log("train/loss", loss, prog_bar=True, batch_size=len(batch["idx"]))
         return loss
 
-    def on_validation_epoch_start(self):
-        self.outputs = {name: [] for name in EVAL_SETS}
-
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
-        name = EVAL_SETS[dataloader_idx]
+        """-> token probabilities, for the F1 callback in src.train."""
         logits = self(batch)
+        name = EVAL_SETS[dataloader_idx]
         self.log(f"{name}/loss", self.loss(logits, batch["labels"]), add_dataloader_idx=False, batch_size=len(batch["idx"]))
-        examples = self.trainer.datamodule.examples[name]
-        for row, i in zip(logits.float().softmax(-1).cpu().numpy(), batch["idx"].tolist()):
-            self.outputs[name].append((i, row[examples[i].word_starts]))
+        return logits.float().softmax(-1)
 
-    def on_validation_epoch_end(self):
-        for name, predictions in self.outputs.items():
-            for metric, value in score(self.trainer.datamodule.examples[name], predictions).items():
-                self.log(f"{name}/{metric}", value, prog_bar=metric == "f1")
+    def on_save_checkpoint(self, checkpoint):
+        checkpoint["config"] = dataclasses.asdict(self.cfg)
+        checkpoint["vocab"] = self.vocab_words
 
     def configure_optimizers(self):
         params = [p for p in self.parameters() if p.requires_grad]

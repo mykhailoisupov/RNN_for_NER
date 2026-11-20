@@ -10,7 +10,8 @@ import argparse
 import pandas as pd
 
 from src.config import SUBMISSION_DIR
-from src.ensemble import average, eval_examples, load_probs
+from src.ensemble import average, eval_examples
+from src.inference import load_probs
 from src.metric import bootstrap_delta, counts_per_post, precision_recall_f1
 from src.submission import SPAN_REPAIRS, answers
 

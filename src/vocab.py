@@ -98,3 +98,10 @@ def build_vocab(cfg, splits):
     if cfg.embedding == "flair":
         return NoVocab()
     raise ValueError(f"unknown embedding: {cfg.embedding}")
+
+
+def saved_vocab(cfg, words):
+    """The vocabulary of a checkpoint: its fastText words, or rebuilt from the config."""
+    if cfg.embedding == "fasttext":
+        return FastTextVocab(words)
+    return build_vocab(cfg, None)

@@ -2,14 +2,16 @@ import argparse
 import dataclasses
 
 import lightning as L
+import numpy as np
 import wandb
 from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
 
-from src.config import MODELS_DIR, SUBMISSION_DIR, WANDB_ENTITY, WANDB_PROJECT, Config
+from src.config import EVAL_SETS, MODELS_DIR, SUBMISSION_DIR, WANDB_ENTITY, WANDB_PROJECT, Config
 from src.dataset import NERDataModule
-from src.ensemble import SPLITS, save_probs, word_probs
-from src.model import Tagger
+from src.inference import SPLITS, load_model, predict_probs, save_probs
+from src.metric import counts_per_post, precision_recall_f1
+from src.model import TaggerModule
 from src.submission import answers, write_submission
 
 NAME_SKIP = {"embedding", "rnn", "bidirectional", "name", "wandb_mode", "accelerator"}
@@ -27,13 +29,45 @@ def run_name(cfg: Config):
     return "-".join([base, *changes])
 
 
+def score(examples, predictions):
+    """P/R/F1 of (index, word probabilities) pairs; the submission path without the test policy."""
+    y_true = [examples[i].locations for i, _ in predictions]
+    y_pred = [answers(examples[i], probs, policy=[]) for i, probs in predictions]
+    return dict(zip(("precision", "recall", "f1"), map(float, precision_recall_f1(counts_per_post(y_true, y_pred).sum(0)))))
+
+
+def oracle_f1(examples):
+    """F1 of the gold tags through the answers path: what tags lose by themselves."""
+    return {f"{name}/oracle_f1": score(examples[name], [(i, np.eye(3)[np.array(ex.labels)[ex.word_starts]])
+                                                       for i, ex in enumerate(examples[name])])["f1"]
+            for name in EVAL_SETS}
+
+
+class ValScore(L.Callback):
+    """val/sample P/R/F1 of the probabilities TaggerModule.validation_step returns."""
+
+    def on_validation_epoch_start(self, trainer, module):
+        self.outputs = {name: [] for name in EVAL_SETS}
+
+    def on_validation_batch_end(self, trainer, module, probs, batch, batch_idx, dataloader_idx=0):
+        name = EVAL_SETS[dataloader_idx]
+        examples = trainer.datamodule.examples[name]
+        for row, i in zip(probs.cpu().numpy(), batch["idx"].tolist()):
+            self.outputs[name].append((i, row[examples[i].word_starts]))
+
+    def on_validation_epoch_end(self, trainer, module):
+        for name, predictions in self.outputs.items():
+            for metric, value in score(trainer.datamodule.examples[name], predictions).items():
+                module.log(f"{name}/{metric}", value, prog_bar=metric == "f1")
+
+
 def run(cfg: Config):
     L.seed_everything(cfg.seed)
     name = run_name(cfg)
 
     data = NERDataModule(cfg)
     data.setup()
-    model = Tagger(cfg, data.vectors)
+    model = TaggerModule(cfg, data.vocab)
 
     logger = WandbLogger(
         project=WANDB_PROJECT,
@@ -44,11 +78,11 @@ def run(cfg: Config):
         log_model="all",
     )
     logger.watch(model.model, log="gradients", log_freq=200)
-    logger.experiment.summary.update(data.oracle_f1())
+    logger.experiment.summary.update(oracle_f1(data.examples))
 
     run_dir = MODELS_DIR / f"{name}-{logger.version}"
     checkpoint = ModelCheckpoint(dirpath=run_dir, filename="best", monitor=cfg.monitor, mode="max")
-    callbacks = [checkpoint, LearningRateMonitor()]
+    callbacks = [ValScore(), checkpoint, LearningRateMonitor()]
     if cfg.patience:
         callbacks.append(EarlyStopping(monitor=cfg.monitor, mode="max", patience=cfg.patience))
     trainer = L.Trainer(
@@ -61,8 +95,8 @@ def run(cfg: Config):
     )
     trainer.fit(model, datamodule=data)
 
-    model = Tagger.load_from_checkpoint(checkpoint.best_model_path, cfg=cfg, vectors=data.vectors)
-    word = {split: word_probs(model, data.examples[split], cfg.eval_batch_size) for split in SPLITS}
+    model, _ = load_model(checkpoint.best_model_path)
+    word = {split: predict_probs(model, data.examples[split], cfg.eval_batch_size) for split in SPLITS}
     probs = run_dir / "probs.npz"
     save_probs(probs, word)
     test = list(zip(data.examples["test"], word["test"]))

@@ -10,8 +10,6 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset, Sampler
 
 from src.config import DATA_DIR, EVAL_SETS, Config
-from src.metric import counts_per_post, precision_recall_f1
-from src.submission import answers
 from src.tags import I, O, spans_to_tags
 from src.text import parse_spans, tokenize
 from src.vocab import PAD, UNK, build_vocab
@@ -72,13 +70,6 @@ def build_examples(rows, vocab):
         locations = [text[a:b] for a, b in spans]
         examples.append(Example(text, tokens, locations, ids, labels, word_starts))
     return examples
-
-
-def score(examples, predictions):
-    """P/R/F1 of (index, word probabilities) pairs; the submission path without the test policy."""
-    y_true = [examples[i].locations for i, _ in predictions]
-    y_pred = [answers(examples[i], probs, policy=[]) for i, probs in predictions]
-    return dict(zip(("precision", "recall", "f1"), map(float, precision_recall_f1(counts_per_post(y_true, y_pred).sum(0)))))
 
 
 class NERDataset(Dataset):
@@ -142,13 +133,6 @@ class NERDataModule(L.LightningDataModule):
         self.vocab = build_vocab(self.cfg, rows)
         self.vectors = self.vocab.vectors
         self.examples = {name: build_examples(r, self.vocab) for name, r in rows.items()}
-
-    def oracle_f1(self):
-        return {
-            f"{name}/oracle_f1": score(self.examples[name], [(i, np.eye(3)[np.array(ex.labels)[ex.word_starts]])
-                                                             for i, ex in enumerate(self.examples[name])])["f1"]
-            for name in EVAL_SETS
-        }
 
     def loader(self, name, shuffle=False):
         examples = self.examples[name]

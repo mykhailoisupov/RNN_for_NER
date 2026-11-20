@@ -1,5 +1,4 @@
 import argparse
-import json
 
 import numpy as np
 import pandas as pd
@@ -7,11 +6,9 @@ import torch
 from torch.utils.data import DataLoader
 
 from src.config import SUBMISSION_DIR
-from src.data import BucketSampler, NERDataset, WordEncoder, collate, encode, load_splits, predicted_locations
+from src.data import BucketSampler, NERDataset, WordEncoder, collate, encode, load_splits
 from src.metric import counts_per_post, precision_recall_f1
-from src.model import viterbi
-from src.postprocess import test_policy
-from src.rampart import rampart_tags
+from src.submission import answers, write_submission
 
 SPLITS = ("val", "sample", "test")
 
@@ -58,49 +55,31 @@ def average(members, weights, split):
     return [sum(w * r[i] for w, r in zip(weights, rows)) / sum(weights) for i in range(len(rows[0]))]
 
 
-def decode(rows):
-    """Viterbi over the averaged word probabilities."""
-    return [viterbi(torch.log(torch.tensor(r).clamp_min(1e-9))[None], torch.tensor([len(r)]))[0] if len(r) else [] for r in rows]
-
-
 def eval_examples():
     splits, test_ids = load_splits(train_size=1, seed=0)
     return {split: encode(splits[split], WordEncoder()) for split in SPLITS}, test_ids
 
 
-def write_submission(path, test_ids, locations):
-    pd.DataFrame({
-        "text_id": test_ids,
-        "locations": [json.dumps(r, ensure_ascii=False) for r in locations],
-    }).sort_values("text_id").to_csv(path, index=False)
-
-
-def run(paths, weights, name, rampart=False):
+def run(paths, weights, name):
     members = [load_probs(p) for p in paths]
     examples, test_ids = eval_examples()
     probs = {split: average(members, weights, split) for split in SPLITS if all(split in m for m in members)}
     for split, rows in probs.items():
         assert [len(r) for r in rows] == [len(ex.word_starts) for ex in examples[split]], f"{split}: probs do not match local data"
 
-    def locations(split):
-        tags = decode(probs[split])
-        if rampart:   # rampart's span repair on the Viterbi tags: neighbours joined by a space or hyphen become one name
-            tags = [rampart_tags(ex.text, [(a, b) for _, a, b in ex.words], p, t)
-                    for ex, p, t in zip(examples[split], probs[split], tags)]
-        return [predicted_locations(ex, t, guards=True) for ex, t in zip(examples[split], tags)]
-
     row = {}
     for split in ("val", "sample"):
-        c = counts_per_post([ex.locations for ex in examples[split]], locations(split))
+        pred = [answers(ex, p, policy=[]) for ex, p in zip(examples[split], probs[split])]
+        c = counts_per_post([ex.locations for ex in examples[split]], pred)
         row.update(zip((f"{split}_p", f"{split}_r", f"{split}_f1"), map(float, precision_recall_f1(c.sum(0)))))
-    grid = pd.DataFrame([row])
+    scores = pd.DataFrame([row])
     SUBMISSION_DIR.mkdir(exist_ok=True)
-    grid.to_csv(SUBMISSION_DIR / f"{name}_grid.csv", index=False)
-    print(grid.round(4).to_string(index=False))
+    scores.to_csv(SUBMISSION_DIR / f"{name}_scores.csv", index=False)
+    print(scores.round(4).to_string(index=False))
 
-    raw = locations("test")
-    policy = [test_policy(ex.text, r) for ex, r in zip(examples["test"], raw)]
-    for suffix, rows in (("", policy), ("_raw", raw)):
+    test = list(zip(examples["test"], probs["test"]))
+    # `_raw`: without the test policy, to see which submission rules the relabelled train has made redundant
+    for suffix, rows in (("", [answers(ex, p) for ex, p in test]), ("_raw", [answers(ex, p, policy=[]) for ex, p in test])):
         path = SUBMISSION_DIR / f"{name}{suffix}.csv"
         write_submission(path, test_ids, rows)
         print("written", path)
@@ -111,6 +90,5 @@ if __name__ == "__main__":
     parser.add_argument("probs", nargs="+")
     parser.add_argument("--weights", type=float, nargs="+")
     parser.add_argument("--name", required=True)
-    parser.add_argument("--rampart", action="store_true", help="rampart span repair after Viterbi (LB 0.64739 -> 0.66180)")
     args = parser.parse_args()
-    run(args.probs, args.weights or [1.0] * len(args.probs), args.name, args.rampart)
+    run(args.probs, args.weights or [1.0] * len(args.probs), args.name)

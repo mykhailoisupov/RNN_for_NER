@@ -15,8 +15,8 @@ import numpy as np
 import pandas as pd
 
 from src.augment import add_name_lines
-from src.postprocess import (CAPITAL, HOUSE, LOWERABLE, REGION_ADJ, STREET_ANY, common_noun, in_org_name,
-                             settlement_start, trim)
+from src.label_policy import (CAPITAL, HOUSE, LOWERABLE, REGION_ADJ, STREET_ANY, in_org_name, is_common_noun,
+                              settlement_start, trim)
 from src.tags import aligned
 from src.text import parse_spans, prepare, tokenize
 
@@ -185,7 +185,7 @@ def fix_spans(text, loc, org=()):
     relabelled = _facilities(text, relabelled)
     for reason, drop in (("LOC inside ORG", lambda a, b: any(c <= a and b <= d for c, d in org)),
                          ("LOC in org name", lambda a, b: in_org_name(text, a, b)),         # `поліція Києва`
-                         ("lowercase common noun", lambda a, b: common_noun(text[a:b]))):   # `пляжі`, `вулиць`
+                         ("lowercase common noun", lambda a, b: is_common_noun(text[a:b]))):   # `пляжі`, `вулиць`
         kept = [(a, b) for a, b in relabelled if not drop(a, b)]
         STATS[f"{reason} removed"] += len(relabelled) - len(kept)
         relabelled = kept

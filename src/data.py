@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader, Dataset, Sampler
 
 from src.config import DATA_DIR, EMBEDDINGS_DIR, EVAL_SETS, Config
 from src.metric import counts_per_post, precision_recall_f1
-from src.postprocess import to_submission
+from src.submission import answers
 from src.tags import I, O, spans_to_tags
 from src.text import parse_spans, tokenize
 
@@ -152,14 +152,10 @@ def encode(rows, encoder):
     return examples
 
 
-def predicted_locations(example, piece_tags, guards=False, glue=True):
-    tags = [piece_tags[i] for i in example.word_starts]
-    return to_submission(example.text, example.words, tags, guards, glue)
-
-
 def score(examples, predictions):
+    """P/R/F1 of (index, word probabilities) pairs; the submission path without the test policy."""
     y_true = [examples[i].locations for i, _ in predictions]
-    y_pred = [predicted_locations(examples[i], tags) for i, tags in predictions]
+    y_pred = [answers(examples[i], probs, policy=[]) for i, probs in predictions]
     return dict(zip(("precision", "recall", "f1"), map(float, precision_recall_f1(counts_per_post(y_true, y_pred).sum(0)))))
 
 
@@ -226,7 +222,8 @@ class NERDataModule(L.LightningDataModule):
 
     def oracle_f1(self):
         return {
-            f"{name}/oracle_f1": score(self.examples[name], [(i, ex.labels) for i, ex in enumerate(self.examples[name])])["f1"]
+            f"{name}/oracle_f1": score(self.examples[name], [(i, np.eye(3)[np.array(ex.labels)[ex.word_starts]])
+                                                             for i, ex in enumerate(self.examples[name])])["f1"]
             for name in EVAL_SETS
         }
 

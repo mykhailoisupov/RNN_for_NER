@@ -9,33 +9,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, OneCycleLR, ReduceLROnPl
 
 from src.config import EVAL_SETS, Config
 from src.data import IGNORE, PAD, score
-from src.tags import I, O, TAGS
-
-
-def viterbi(logits, lengths):
-    """Best tag path per sequence with O->I and start->I forbidden, so no span starts on I (argmax gave
-    `Михайлівського` + `собору` around an O). Returns one list of tag ids per sequence, cut to its length."""
-    logp = logits.float().log_softmax(-1)
-    ban = torch.zeros(len(TAGS), len(TAGS), device=logp.device)
-    ban[O, I] = float("-inf")
-    score = logp[:, 0].clone()
-    score[:, I] = float("-inf")
-    back = []
-    for t in range(1, logp.size(1)):
-        best, prev = (score.unsqueeze(2) + ban).max(1)          # [batch, prev, cur] -> [batch, cur]
-        back.append(prev)
-        alive = (t < lengths.to(logp.device)).unsqueeze(1)
-        score = torch.where(alive, best + logp[:, t], score)     # padding keeps the score of the last token
-    back = torch.stack(back, 1).tolist() if back else []
-    paths = []
-    for b, n in enumerate(lengths.tolist()):
-        tag = int(score[b].argmax())
-        path = [tag]
-        for t in range(n - 1, 0, -1):
-            tag = back[b][t - 1][tag]
-            path.append(tag)
-        paths.append(path[::-1])
-    return paths
+from src.tags import TAGS
 
 
 RNNS = {"lstm": nn.LSTM, "gru": nn.GRU}
@@ -115,9 +89,6 @@ class Tagger(L.LightningModule):
     def loss(self, logits, labels):
         return F.cross_entropy(logits.flatten(0, 1), labels.flatten(), ignore_index=IGNORE)
 
-    def predictions(self, logits, batch):
-        return list(zip(batch["idx"].tolist(), viterbi(logits, batch["lengths"])))
-
     def training_step(self, batch, batch_idx):
         loss = self.loss(self(batch), batch["labels"])
         self.log("train/loss", loss, prog_bar=True, batch_size=len(batch["idx"]))
@@ -130,15 +101,14 @@ class Tagger(L.LightningModule):
         name = EVAL_SETS[dataloader_idx]
         logits = self(batch)
         self.log(f"{name}/loss", self.loss(logits, batch["labels"]), add_dataloader_idx=False, batch_size=len(batch["idx"]))
-        self.outputs[name] += self.predictions(logits, batch)
+        examples = self.trainer.datamodule.examples[name]
+        for row, i in zip(logits.float().softmax(-1).cpu().numpy(), batch["idx"].tolist()):
+            self.outputs[name].append((i, row[examples[i].word_starts]))
 
     def on_validation_epoch_end(self):
         for name, predictions in self.outputs.items():
             for metric, value in score(self.trainer.datamodule.examples[name], predictions).items():
                 self.log(f"{name}/{metric}", value, prog_bar=metric == "f1")
-
-    def predict_step(self, batch, batch_idx):
-        return self.predictions(self(batch), batch)
 
     def configure_optimizers(self):
         params = [p for p in self.parameters() if p.requires_grad]

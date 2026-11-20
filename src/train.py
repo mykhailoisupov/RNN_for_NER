@@ -7,10 +7,10 @@ from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, Mode
 from lightning.pytorch.loggers import WandbLogger
 
 from src.config import MODELS_DIR, SUBMISSION_DIR, WANDB_ENTITY, WANDB_PROJECT, Config
-from src.data import NERDataModule, predicted_locations
-from src.ensemble import SPLITS, save_probs, word_probs, write_submission
+from src.data import NERDataModule
+from src.ensemble import SPLITS, save_probs, word_probs
 from src.model import Tagger
-from src.postprocess import test_policy
+from src.submission import answers, write_submission
 
 NAME_SKIP = {"embedding", "rnn", "bidirectional", "name", "wandb_mode", "accelerator"}
 
@@ -61,19 +61,17 @@ def run(cfg: Config):
     )
     trainer.fit(model, datamodule=data)
 
-    batches = trainer.predict(model, datamodule=data, ckpt_path="best")
-    predictions = [p for batch in batches for p in batch]
-    examples = data.examples["test"]
-    test_ids = [data.test_ids[i] for i, _ in predictions]
-    raw = [predicted_locations(examples[i], tags, guards=True) for i, tags in predictions]
+    model = Tagger.load_from_checkpoint(checkpoint.best_model_path, cfg=cfg, vectors=data.vectors)
+    word = {split: word_probs(model, data.examples[split], cfg.eval_batch_size) for split in SPLITS}
+    probs = run_dir / "probs.npz"
+    save_probs(probs, word)
+    test = list(zip(data.examples["test"], word["test"]))
     SUBMISSION_DIR.mkdir(exist_ok=True)
     path = SUBMISSION_DIR / f"{name}.csv"
-    # `_raw`: without test_policy, to see which submission rules the relabelled train has made redundant
+    # `_raw`: without the test policy, to see which submission rules the relabelled train has made redundant
     raw_path = SUBMISSION_DIR / f"{name}_raw.csv"
-    write_submission(path, test_ids, [test_policy(examples[i].text, r) for (i, _), r in zip(predictions, raw)])
-    write_submission(raw_path, test_ids, raw)
-    probs = run_dir / "probs.npz"
-    save_probs(probs, {split: word_probs(model, data.examples[split], cfg.eval_batch_size) for split in SPLITS})
+    write_submission(path, data.test_ids, [answers(ex, p) for ex, p in test])
+    write_submission(raw_path, data.test_ids, [answers(ex, p, policy=[]) for ex, p in test])
 
     logger.experiment.summary["best/" + cfg.monitor] = checkpoint.best_model_score.item()
     outputs = wandb.Artifact(f"submission-{logger.version}", type="submission")

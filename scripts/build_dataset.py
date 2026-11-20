@@ -39,14 +39,16 @@ N_FOLDS = 5
 RU_DOC_MOD = 10                           # keep full rows for every 10th ru document, enough for 20% of train
 SEPARATORS, SEPARATOR_P = ["\n\n", "\n", " "], [0.7, 0.2, 0.1]
 
-# Target shares of test posts.
+# Target shares of test posts, from notebooks/EDA.ipynb as run on 2026-11-20 (test labelled by regex_labeller):
+# names per post from 6.6, posts and empty posts per length bin from 6.8, kyiv and street from 6.7; district is
+# features() over the same labels.
 BIN_NAMES = ["0-15", "16-30", "31-60", "61-120", "121+"]
 BIN_LOW, BIN_HIGH = np.array([1, 16, 31, 61, 121]), np.array([15, 30, 60, 120, 250])
 TARGET_WORDS = np.array([0.220, 0.239, 0.245, 0.201, 0.094])
-TARGET_EMPTY = np.array([0.4286, 0.2281, 0.2393, 0.1667, 0.1556])
-TARGET_PROFILE = {"names 0": 25.6, "names 1": 35.6, "names 2": 20.3, "names 3-4": 11.9, "names 5+": 6.5,
+TARGET_EMPTY = np.array([0.6476, 0.3684, 0.3504, 0.1458, 0.0667])
+TARGET_PROFILE = {"names 0": 35.2, "names 1": 31.4, "names 2": 17.2, "names 3-4": 10.9, "names 5+": 5.2,
                   **{f"words {n}": 100 * p for n, p in zip(BIN_NAMES, TARGET_WORDS)},
-                  "kyiv": 41.1, "street": 9.6, "multiline": 85.0, "median words": 36,
+                  "kyiv": 41.1, "street": 10.7, "district": 14.5, "multiline": 85.0, "median words": 36,
                   #  what test has, not a target: FOOTER_SHARE and SHORT_LINE_SHARE are kept low on purpose
                   "ends with newline": 36.9, "short line": 23.9,
                   "caps line": 1.7, "caps words / 1000": 6.0, "ru": 8.0}

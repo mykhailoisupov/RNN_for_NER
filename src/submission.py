@@ -12,7 +12,7 @@ from src.decoding import decode
 from src.label_policy import POLICY, relabel, trim_edges
 from src.metric import hard_processing
 from src.tags import tags_to_spans
-from src.text import prepare
+from src.tokenizer import prepare
 
 
 def split_at_newlines(text, spans):

@@ -7,7 +7,7 @@ import pandas as pd
 
 from src.corpus import DISTRICT, STREET, fix_spans
 from src.label_policy import KYIV, NAME_WORD
-from src.text import prepare
+from src.tokenizer import prepare
 
 from .test_vs_sources import comparison_text, words
 

@@ -1,5 +1,6 @@
 """Sentences of the source corpora (uk/ru/tg geo datasets): their dedup key, their labels as test labels them, and
-the label features the test profile is measured by. Shared by scripts.build_dataset and notebooks/eda."""
+the label features the test profile is measured by; also the `(a, b)` spans of a labelled CSV.
+Shared by src.dataset, scripts.build_dataset and notebooks/eda."""
 import re
 import unicodedata
 import zlib
@@ -7,11 +8,17 @@ from collections import Counter
 
 from src.label_policy import CAPITAL, KYIV, LOWERABLE, TRAIN_POLICY, clean_spans, relabel
 from src.tags import aligned
-from src.text import tokenize
+from src.tokenizer import tokenize
 
 STREET = r"(?:вул\.|ул\.|вулиц[яіюе]|улиц[аыуеу]|проспект(?:і|у|ом|а|е)?|просп\.|провул(?:ок|ку)|переул(?:ок|ке)|бульвар(?:і|у|а|е)?|бул\.|площ(?:а|і|у|адь|ади)|набережн\w*)"
 DISTRICT = r"район|област|\bобл\.|\bр-н\b|щин[аіиу]$"   # `Дарницькому районі`, `Київщина`
 TCH = re.compile(r"\s[-–—]\s[^-–—]{1,40}\s[-–—]\s*TCH\.?\s*$")
+SPAN = re.compile(r"\((\d+),\s*(\d+)\)")
+
+
+def parse_spans(value):
+    """`[(3, 8), (12, 17)]` as a CSV cell keeps it -> [(3, 8), (12, 17)]."""
+    return [(int(a), int(b)) for a, b in SPAN.findall(str(value))]
 
 
 def crc(value):

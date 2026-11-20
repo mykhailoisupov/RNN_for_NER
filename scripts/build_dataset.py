@@ -12,11 +12,11 @@ from collections import Counter
 import numpy as np
 import pandas as pd
 
-from src.corpus import DISTRICT, STREET, crc, fix_spans, normalize_text
+from src.corpus import DISTRICT, STREET, crc, fix_spans, normalize_text, parse_spans
 from src.label_policy import REGION_ADJ
 from src.project import DATA_DIR, NORMALIZED_DIR, WANDB_ENTITY, WANDB_PROJECT
 from src.tags import aligned
-from src.text import parse_spans, prepare, tokenize
+from src.tokenizer import prepare, tokenize
 
 RU_SHARE, VAL_RU_SHARE = 0.20, 0.08
 TG_SHARE = 0.25                           # posts from Telegram sentences (scripts.fetch_ubertext), train and val

@@ -1,12 +1,5 @@
 """Entity merging ported from rampart, src/ner/classifier.ts (mergeBioTokens, repairSpans and helpers).
 
-Source: https://github.com/nationaldesignstudio/rampart
-Copyright 2026 National Design Studio, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
-Changes: TypeScript -> Python; one entity type (LOC), so the label checks are dropped; tokens are whole words, so
-there is no `##` subword rule; no token windows (the RNN reads the whole post) and no hyphen-to-space folding before
-the model (ours was trained on hyphens). The capitalised-particle rescue is for person names in rampart and stays
-off for LOC unless `rescue=True`. The result goes back to word tags, so our postprocessing runs on it unchanged.
-
 Input is an independent per-word classification, as transformers.js returns it: O words are dropped, the rest
 carry their tag and its probability. Because O words are gone, `B O I` merges into one span across the O word.
 """

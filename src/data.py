@@ -3,7 +3,6 @@ import random
 import urllib.request
 from collections import Counter
 from dataclasses import dataclass
-from typing import List
 
 import lightning as L
 import numpy as np
@@ -12,13 +11,14 @@ import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset, Sampler
 
-from src.config import DATA_DIR, EMBEDDINGS_DIR, EVAL_SETS, TAGS, Config
-from src.postprocess import hard_processing, to_submission
-from src.text import parse_spans, prepare, tokenize
+from src.config import DATA_DIR, EMBEDDINGS_DIR, EVAL_SETS, Config
+from src.metric import counts_per_post, precision_recall_f1
+from src.postprocess import to_submission
+from src.tags import I, O, spans_to_tags
+from src.text import parse_spans, tokenize
 
 NORMALIZED_DIR = DATA_DIR / "normalized"
 FASTTEXT_URL = "https://dl.fbaipublicfiles.com/fasttext/vectors-crawl/cc.uk.300.vec.gz"
-TAG_ID = {tag: i for i, tag in enumerate(TAGS)}
 PAD, UNK, IGNORE = 0, 1, -100
 
 
@@ -32,46 +32,6 @@ class Example:
     word_starts: list
 
 
-def split_words(text):
-    """Tokens of prepare(text); prepare keeps the length, so offsets also cut the original."""
-    prepared = prepare(text)
-    return [(prepared[a:b], a, b) for a, b in tokenize(prepared)]
-
-
-def spans_to_tags(words, spans):
-    tags = ["O"] * len(words)
-    for a, b in spans:
-        inside = [i for i, (_, start, end) in enumerate(words) if start < b and end > a]
-        for k, i in enumerate(inside):
-            if tags[i] == "O":
-                tags[i] = "B-LOC" if k == 0 else "I-LOC"
-    return tags
-
-
-def post_counts(y_true, y_pred):
-    """tp, fp, fn of every post over sets of hard_processing'ed strings; shape (posts, 3)."""
-    assert len(y_true) == len(y_pred)
-    rows = []
-    for t, p in zip(y_true, y_pred):
-        t, p = {hard_processing(s) for s in t}, {hard_processing(s) for s in p}
-        rows.append((len(t & p), len(p - t), len(t - p)))
-    return np.array(rows, dtype=float).reshape(-1, 3)
-
-
-def prf(counts):
-    """Precision, recall, F1 of summed tp/fp/fn, shape (..., 3). Competition edge cases:
-    nothing predicted -> precision 1 if nothing is gold else 0; nothing gold -> recall 1."""
-    tp, fp, fn = np.moveaxis(counts, -1, 0)
-    precision = (tp + (tp + fp == 0) * (fn == 0)) / np.maximum(tp + fp, 1)
-    recall = (tp + (tp + fn == 0)) / np.maximum(tp + fn, 1)
-    return precision, recall, 2 * precision * recall / np.maximum(precision + recall, 1e-12)
-
-
-def comp_metric(y_true: List[List[str]], y_pred: List[List[str]]):
-    """The competition metric: micro P/R/F1 over all posts."""
-    return tuple(round(float(x), 8) for x in prf(post_counts(y_true, y_pred).sum(0)))
-
-
 def load_splits(train_size, seed):
     """train/val: posts from scripts/build_dataset.py; sample/test: raw competition files."""
     train = pd.read_parquet(NORMALIZED_DIR / "train.parquet", columns=["text", "spans"])
@@ -82,7 +42,7 @@ def load_splits(train_size, seed):
     test = pd.read_csv(DATA_DIR / "test.csv")
 
     def rows(texts, spans):
-        return [(text, split_words(text), [(int(a), int(b)) for a, b in s]) for text, s in zip(texts, spans)]
+        return [(text, tokenize(text), [(int(a), int(b)) for a, b in s]) for text, s in zip(texts, spans)]
 
     splits = {
         "train": rows(train["text"], train["spans"]),
@@ -182,10 +142,9 @@ def encode(rows, encoder):
             if word not in cache:
                 cache[word] = encoder.encode(word) or [UNK]
             pieces = cache[word]
-            inner = "O" if tag == "O" else "I-LOC"
             word_starts.append(len(ids))
             ids += pieces
-            labels += [TAG_ID[tag]] + [TAG_ID[inner]] * (len(pieces) - 1)
+            labels += [tag] + [O if tag == O else I] * (len(pieces) - 1)
         if not ids:
             ids, labels = [UNK], [IGNORE]
         locations = [text[a:b] for a, b in spans]
@@ -194,15 +153,14 @@ def encode(rows, encoder):
 
 
 def predicted_locations(example, piece_tags, guards=False, glue=True):
-    tags = [TAGS[piece_tags[i]][0] for i in example.word_starts]   # B-LOC -> B, as src.text expects
-    offsets = [(start, end) for _, start, end in example.words]
-    return to_submission(example.text, offsets, tags, guards, glue)
+    tags = [piece_tags[i] for i in example.word_starts]
+    return to_submission(example.text, example.words, tags, guards, glue)
 
 
 def score(examples, predictions):
     y_true = [examples[i].locations for i, _ in predictions]
     y_pred = [predicted_locations(examples[i], tags) for i, tags in predictions]
-    return dict(zip(("precision", "recall", "f1"), comp_metric(y_true, y_pred)))
+    return dict(zip(("precision", "recall", "f1"), map(float, precision_recall_f1(counts_per_post(y_true, y_pred).sum(0)))))
 
 
 class NERDataset(Dataset):

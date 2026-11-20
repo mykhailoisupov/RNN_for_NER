@@ -4,6 +4,7 @@ Every function here keeps the text length, so offsets found on prepared text cut
 """
 import re
 import unicodedata
+from typing import NamedTuple
 
 
 class _CharTable(dict):
@@ -67,41 +68,12 @@ def parse_spans(value):
     return [(int(a), int(b)) for a, b in SPAN.findall(str(value))]
 
 
+class Token(NamedTuple):
+    text: str
+    start: int
+    end: int
+
+
 def tokenize(text):
-    return [m.span() for m in TOKEN.finditer(text)]
-
-
-def spans_to_bio(offsets, spans):
-    tags, misaligned = ["O"] * len(offsets), 0
-    for a, b in spans:
-        hit = [i for i, (s, e) in enumerate(offsets) if s < b and a < e]
-        if not hit or offsets[hit[0]][0] != a or offsets[hit[-1]][1] != b:
-            misaligned += 1
-        if hit:
-            tags[hit[0]] = "B"
-            for i in hit[1:]:
-                tags[i] = "I"
-    return tags, misaligned
-
-
-def tags_to_spans(offsets, tags):
-    spans, i = [], 0
-    while i < len(tags):
-        if tags[i] == "O":
-            i += 1
-            continue
-        j = i + 1
-        while j < len(tags) and tags[j] == "I":
-            j += 1
-        spans.append((offsets[i][0], offsets[j - 1][1]))
-        i = j
-    return spans
-
-
-def encode(text, spans):
-    """-> (tokens, offsets, BIO tags), or None when the spans do not survive spans -> BIO -> spans."""
-    offsets = tokenize(text)
-    tags, _ = spans_to_bio(offsets, spans)
-    if tags_to_spans(offsets, tags) != sorted(spans):
-        return None
-    return [text[a:b] for a, b in offsets], offsets, tags
+    """Tokens of prepare(text); prepare keeps the length, so their offsets also cut the original."""
+    return [Token(m.group(), *m.span()) for m in TOKEN.finditer(prepare(text))]

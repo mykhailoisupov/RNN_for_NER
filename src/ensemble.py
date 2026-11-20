@@ -7,7 +7,8 @@ import torch
 from torch.utils.data import DataLoader
 
 from src.config import SUBMISSION_DIR
-from src.data import BucketSampler, NERDataset, WordEncoder, collate, encode, load_splits, post_counts, predicted_locations, prf
+from src.data import BucketSampler, NERDataset, WordEncoder, collate, encode, load_splits, predicted_locations
+from src.metric import counts_per_post, precision_recall_f1
 from src.model import viterbi
 from src.postprocess import test_policy
 from src.rampart import rampart_tags
@@ -90,8 +91,8 @@ def run(paths, weights, name, rampart=False):
 
     row = {}
     for split in ("val", "sample"):
-        c = post_counts([ex.locations for ex in examples[split]], locations(split))
-        row.update(zip((f"{split}_p", f"{split}_r", f"{split}_f1"), map(float, prf(c.sum(0)))))
+        c = counts_per_post([ex.locations for ex in examples[split]], locations(split))
+        row.update(zip((f"{split}_p", f"{split}_r", f"{split}_f1"), map(float, precision_recall_f1(c.sum(0)))))
     grid = pd.DataFrame([row])
     SUBMISSION_DIR.mkdir(exist_ok=True)
     grid.to_csv(SUBMISSION_DIR / f"{name}_grid.csv", index=False)

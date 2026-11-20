@@ -7,11 +7,11 @@ Chosen on val F1; sample is a check. Writes merge-best.csv and merge-rampart.csv
 import argparse
 import itertools
 
-import numpy as np
 import pandas as pd
 
 from src.config import SUBMISSION_DIR
-from src.data import post_counts, predicted_locations, prf
+from src.data import predicted_locations
+from src.metric import bootstrap_delta, counts_per_post, precision_recall_f1
 from src.ensemble import average, decode, eval_examples, load_probs, write_submission
 from src.postprocess import test_policy
 from src.rampart import EXTEND_SCORE, MIN_SCORE, rampart_tags
@@ -35,12 +35,6 @@ def strict(tags):
 def merge_adjacent(tags):
     """B right after a name continues it: `B B` -> `B I`."""
     return [2 if tag == 1 and k and tags[k - 1] != 0 else tag for k, tag in enumerate(tags)]
-
-
-def bootstrap_delta(base, new, n=1000, seed=0):
-    """95% interval of F1(new) - F1(base) over posts resampled together (a paired bootstrap)."""
-    idx = np.random.default_rng(seed).integers(0, len(base), (n, len(base)))
-    return np.quantile(prf(new[idx].sum(1))[2] - prf(base[idx].sum(1))[2], [0.025, 0.975])
 
 
 def rampart(decoded, **kw):
@@ -89,8 +83,8 @@ def main(paths, name):
     def score(label, config, rows, counts):
         row = {"config": label}
         for split in ("val", "sample"):
-            c = post_counts([ex.locations for ex in examples[split]], locations(split, config))
-            row.update(zip((f"{split}_p", f"{split}_r", f"{split}_f1"), map(float, prf(c.sum(0)))))
+            c = counts_per_post([ex.locations for ex in examples[split]], locations(split, config))
+            row.update(zip((f"{split}_p", f"{split}_r", f"{split}_f1"), map(float, precision_recall_f1(c.sum(0)))))
             if split == "val":
                 counts[label] = c
         rows.append(row)
@@ -117,7 +111,7 @@ def main(paths, name):
         low, high = bootstrap_delta(counts[BASE], counts[label])
         raw = locations("test", grid[label])
         changed = sum(set(a) != set(b) for a, b in zip(raw, base_test))
-        print(f"{tag}: {label}  val F1 {prf(counts[BASE].sum(0))[2]:.4f} -> {prf(counts[label].sum(0))[2]:.4f}, "
+        print(f"{tag}: {label}  val F1 {precision_recall_f1(counts[BASE].sum(0))[2]:.4f} -> {precision_recall_f1(counts[label].sum(0))[2]:.4f}, "
               f"delta 95% CI [{low:+.4f}, {high:+.4f}]; test posts changed: {changed} of {len(raw)}")
         policy = [test_policy(ex.text, r) for ex, r in zip(examples["test"], raw)]
         for suffix, locs in (("", policy), ("_raw", raw)):

@@ -7,11 +7,9 @@ from torch import nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from torch.optim.lr_scheduler import CosineAnnealingLR, OneCycleLR, ReduceLROnPlateau
 
-from src.config import EVAL_SETS, TAGS, Config
+from src.config import EVAL_SETS, Config
 from src.data import IGNORE, PAD, score
-
-
-O_TAG, I_TAG = TAGS.index("O"), TAGS.index("I-LOC")
+from src.tags import I, O, TAGS
 
 
 def viterbi(logits, lengths):
@@ -19,9 +17,9 @@ def viterbi(logits, lengths):
     `Михайлівського` + `собору` around an O). Returns one list of tag ids per sequence, cut to its length."""
     logp = logits.float().log_softmax(-1)
     ban = torch.zeros(len(TAGS), len(TAGS), device=logp.device)
-    ban[O_TAG, I_TAG] = float("-inf")
+    ban[O, I] = float("-inf")
     score = logp[:, 0].clone()
-    score[:, I_TAG] = float("-inf")
+    score[:, I] = float("-inf")
     back = []
     for t in range(1, logp.size(1)):
         best, prev = (score.unsqueeze(2) + ban).max(1)          # [batch, prev, cur] -> [batch, cur]

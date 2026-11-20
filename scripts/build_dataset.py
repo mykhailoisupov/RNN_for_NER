@@ -17,7 +17,8 @@ import pandas as pd
 from src.augment import add_name_lines
 from src.postprocess import (CAPITAL, HOUSE, LOWERABLE, REGION_ADJ, STREET_ANY, common_noun, in_org_name,
                              settlement_start, trim)
-from src.text import encode, parse_spans, prepare
+from src.tags import aligned
+from src.text import parse_spans, prepare, tokenize
 
 DATA = Path(__file__).resolve().parent.parent / "data"
 OUT = DATA / "normalized"
@@ -194,7 +195,7 @@ def fix_spans(text, loc, org=()):
             if LOWERABLE.fullmatch(text, a, b):
                 text = text[:a] + text[a:b].lower() + text[b:]
                 STATS["LOC lowercased"] += 1
-    if spans and encode(text, spans) is None:   # shifted offsets or glued words, not fixable
+    if spans and not aligned(tokenize(text), spans):   # shifted offsets or glued words, not fixable
         STATS["rows dropped: span cuts a word"] += 1
         return None
     return text, spans
@@ -405,7 +406,7 @@ def build(rebuild=False, ru_share=RU_SHARE, seed=0):
             print(f"  only {len(parts['ru']):,} ru posts for {wanted_ru:,} wanted: lower --ru-share or RU_DOC_MOD")
         parts["ru"] = parts["ru"].sample(n=min(wanted_ru, len(parts["ru"])), random_state=seed)
         posts = pd.concat(parts.values()).sample(frac=1, random_state=seed).reset_index(drop=True)
-        assert all(encode(t, s) is not None for t, s in zip(posts.text, posts.spans))
+        assert all(aligned(tokenize(t), s) for t, s in zip(posts.text, posts.spans))
         result[split] = posts
         posts.drop(columns=[] if split == "train" else ["fold"]).to_parquet(OUT / f"{split}.parquet")
 

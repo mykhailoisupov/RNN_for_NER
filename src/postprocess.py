@@ -5,9 +5,10 @@ found on the prepared text are therefore valid in the original, and the answer i
 from the original: its apostrophes, spaces and case reach the submission untouched.
 """
 import re
-import string
 
-from src.text import prepare, tags_to_spans
+from src.metric import hard_processing
+from src.tags import B, I, O, tags_to_spans
+from src.text import prepare
 
 #  Compound names split on a hyphen are glued (Києво-Печерська, Івано-Франківськ, Нью-Делі). A plain hyphen between
 #  two names is a route (`Київ-Одеса`, `Брест-Ковель`): two answers, so only these left parts glue.
@@ -51,22 +52,13 @@ SETTLEMENT_LEFT = re.compile(r"(?<!\w)(?:сел(?:о|а|і|ом|е)|селищ(?
                              r"|станці(?:я|ї|ю|єю)|станци(?:я|и|ю|ей))\s+[«\"]?$", re.I)
 
 
-def hard_processing(text):
-    """Verbatim copy of the competition metric's normalisation (the missing `f` is theirs)."""
-    text = re.sub(r"[{re.escape(string.punctuation)}]", "", text)
-    text = re.sub(r"\d", "", text)
-    text = re.sub(r"\b\w\b\s?", "", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text.lower()
-
-
-def glue_hyphens(text, offsets, tags):
+def glue_hyphens(text, tokens, tags):
     tags = list(tags)
-    for k in range(1, len(offsets) - 1):
-        (pa, pb), (a, b), (na, _) = offsets[k - 1], offsets[k], offsets[k + 1]
-        if (text[a:b] in ("-", "–") and pb == a and b == na and tags[k - 1] != "O" and tags[k + 1] != "O"
+    for k in range(1, len(tokens) - 1):
+        (_, pa, pb), (_, a, b), (_, na, _) = tokens[k - 1], tokens[k], tokens[k + 1]
+        if (text[a:b] in ("-", "–") and pb == a and b == na and tags[k - 1] != O and tags[k + 1] != O
                 and COMPOUND_LEFT.fullmatch(text[pa:pb])):
-            tags[k] = tags[k + 1] = "I"
+            tags[k] = tags[k + 1] = I
     return tags
 
 
@@ -83,26 +75,26 @@ def trim(text, a, b):
     return a, b
 
 
-def split_brackets(text, offsets, tags):
+def split_brackets(text, tokens, tags):
     """A round bracket is never inside a name: `Левицького 18а (Курчатова` -> `Левицького 18а` + `Курчатова`."""
     tags = list(tags)
-    for k, (a, b) in enumerate(offsets):
-        if tags[k] != "O" and text[a:b] in ("(", ")"):
-            tags[k] = "O"
-            if k + 1 < len(tags) and tags[k + 1] == "I":
-                tags[k + 1] = "B"
+    for k, (_, a, b) in enumerate(tokens):
+        if tags[k] != O and text[a:b] in ("(", ")"):
+            tags[k] = O
+            if k + 1 < len(tags) and tags[k + 1] == I:
+                tags[k + 1] = B
     return tags
 
 
-def to_submission(original_text, offsets, tags, guards=False, glue=True):
-    """`offsets` come from tokenize(prepare(original_text)); the strings come from the original."""
+def to_submission(original_text, tokens, tags, guards=False, glue=True):
+    """`tokens` come from tokenize(original_text); the strings come from the original."""
     prepared = prepare(original_text)
     if glue:
-        tags = glue_hyphens(prepared, offsets, tags)
+        tags = glue_hyphens(prepared, tokens, tags)
     if guards:
-        tags = split_brackets(prepared, offsets, tags)
+        tags = split_brackets(prepared, tokens, tags)
     out = {}
-    for a, b in tags_to_spans(offsets, tags):
+    for a, b in tags_to_spans(tokens, tags):
         label = original_text[slice(*trim(original_text, a, b))]
         if hard_processing(label) and not (guards and common_noun(label)):   # an empty string counts as a false positive
             out[label] = None               # the metric compares sets

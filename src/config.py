@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 
 @dataclass
 class VocabConfig:      # src.vocab, model.build_embedder
-    embedding: str = "fasttext"     # fasttext | bpemb | flair
+    embedding: str = "fasttext+flair"   # fasttext | bpemb | flair | fasttext+flair
     bpe_vocab_size: int = 50000
     min_freq: int = 2
     freeze_embeddings: bool = True
@@ -12,7 +12,7 @@ class VocabConfig:      # src.vocab, model.build_embedder
 
 @dataclass
 class DataConfig:       # NERDataModule, predict_probs
-    train_size: int = 200_000       # 0: every post
+    train_size: int = 0             # 0: every post
     batch_size: int = 128
     eval_batch_size: int = 64
 
@@ -23,7 +23,9 @@ class ModelConfig:      # Tagger, RNNEncoder
     bidirectional: bool = True
     hidden_size: int = 256
     num_layers: int = 2
-    dropout: float = 0.3
+    embedding_dropout: float = 0.3  # on the stacked word vectors
+    rnn_dropout: float = 0.3        # between RNN layers and before the head
+    word_dropout: float = 0.05      # share of whole word vectors zeroed in training
 
 
 @dataclass

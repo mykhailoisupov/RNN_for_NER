@@ -13,7 +13,7 @@ from src.config import Config
 from src.project import DATA_DIR, NORMALIZED_DIR
 from src.tags import I, O, spans_to_tags
 from src.text import parse_spans, tokenize
-from src.vocab import PAD, UNK, build_vocab
+from src.vocab import PAD, UNK, build_vocab, encode_chars, word_shape
 
 IGNORE = -100
 EVAL_SETS = ("val", "sample")    # scored every epoch; the order of val_dataloader
@@ -28,6 +28,8 @@ class Example:
     ids: list
     labels: list
     word_starts: list
+    chars: list     # char ids of the word of every id
+    shapes: list    # word_shape of the word of every id
 
 
 def _rows(texts, spans):
@@ -60,18 +62,20 @@ def build_examples(rows, vocab):
     cache, examples = {}, []
     for text, tokens, spans in rows:
         tags = spans_to_tags(tokens, spans)
-        ids, labels, word_starts = [], [], []
+        ids, labels, word_starts, chars, shapes = [], [], [], [], []
         for token, tag in zip(tokens, tags):
             if token.text not in cache:
-                cache[token.text] = vocab.encode(token.text) or [UNK]
-            pieces = cache[token.text]
+                cache[token.text] = vocab.encode(token.text) or [UNK], encode_chars(token.text), word_shape(token.text)
+            pieces, word_chars, shape = cache[token.text]
             word_starts.append(len(ids))
             ids += pieces
             labels += [tag] + [O if tag == O else I] * (len(pieces) - 1)
+            chars += [word_chars] * len(pieces)      # a BPEmb piece gets the features of its word
+            shapes += [shape] * len(pieces)
         if not ids:
-            ids, labels = [UNK], [IGNORE]
+            ids, labels, chars, shapes = [UNK], [IGNORE], [(PAD,)], [PAD]
         locations = [text[a:b] for a, b in spans]
-        examples.append(Example(text, tokens, locations, ids, labels, word_starts))
+        examples.append(Example(text, tokens, locations, ids, labels, word_starts, chars, shapes))
     return examples
 
 
@@ -85,7 +89,7 @@ class NERDataset(Dataset):
     def __getitem__(self, i):
         example = self.examples[i]
         words = [t.text for t in example.tokens]
-        return i, torch.tensor(example.ids), torch.tensor(example.labels), words
+        return i, torch.tensor(example.ids), torch.tensor(example.labels), words, example.chars, torch.tensor(example.shapes)
 
 
 class BucketSampler(Sampler):
@@ -111,14 +115,25 @@ class BucketSampler(Sampler):
         return full * -(-self.pool // self.batch_size) + -(-rest // self.batch_size)
 
 
+def pad_chars(chars):
+    """Char ids of every word of every post -> [posts, words, chars], PAD-filled."""
+    length = max(len(word) for post in chars for word in post)
+    width = max(len(post) for post in chars)
+    empty = (PAD,) * length
+    return torch.tensor([[word + (PAD,) * (length - len(word)) for word in post] + [empty] * (width - len(post))
+                         for post in chars])
+
+
 def collate(batch):
-    idx, ids, labels, words = zip(*batch)
+    idx, ids, labels, words, chars, shapes = zip(*batch)
     return {
         "idx": torch.tensor(idx),
         "words": list(words),
         "ids": pad_sequence(ids, batch_first=True, padding_value=PAD),
         "labels": pad_sequence(labels, batch_first=True, padding_value=IGNORE),
         "lengths": torch.tensor([len(x) for x in ids]),
+        "chars": pad_chars(chars),
+        "shapes": pad_sequence(shapes, batch_first=True, padding_value=PAD),
     }
 
 

@@ -2,18 +2,20 @@ from functools import partial
 
 import lightning as L
 import torch
-import torch.nn.functional as F
 from torch import nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from torch.optim.lr_scheduler import CosineAnnealingLR, OneCycleLR, ReduceLROnPlateau
 
 from src.config import Config, ModelConfig, VocabConfig
-from src.dataset import EVAL_SETS, IGNORE
-from src.vocab import PAD
+from src.crf import CRF
+from src.dataset import EVAL_SETS
 from src.tags import TAGS
+from src.vocab import CHARS, PAD, SHAPES
 
 
 RNNS = {"lstm": nn.LSTM, "gru": nn.GRU}
+CHAR_DIM = 30     # char embedding and CNN filters (Ma & Hovy, 2016)
+CASING_DIM = 8
 OPTIMIZERS = {
     "adamw": torch.optim.AdamW,
     "adam": torch.optim.Adam,
@@ -23,25 +25,78 @@ OPTIMIZERS = {
 
 
 def build_embedder(vectors, cfg: VocabConfig):
-    if cfg.embedding in ("fasttext", "bpemb"):
-        return LookupEmbedder(vectors, cfg.freeze_embeddings)
-    if cfg.embedding == "flair":
-        return FlairEmbedder()
-    raise ValueError(f"unknown embedding: {cfg.embedding}")
+    """fastText or BPEmb rows (when the vocabulary has vectors) and/or Flair, then characters and word shape."""
+    parts = [LookupEmbedder(vectors, cfg.freeze_embeddings)] if vectors is not None else []
+    if "flair" in cfg.embedding:
+        parts.append(FlairEmbedder())
+    return StackedEmbedder(parts + [CharCNN(), CasingEmbedder()])
+
+
+def lengths_mask(batch):
+    """[batch, steps]: True on the real tokens of every post."""
+    lengths = batch["lengths"].to(batch["ids"].device)
+    return torch.arange(batch["ids"].size(1), device=lengths.device) < lengths[:, None]
 
 
 class Tagger(nn.Module):
+    """Stacked word vectors -> word dropout -> BiLSTM -> per-tag scores of every token, which the CRF reads."""
+
     def __init__(self, vectors, cfg: Config):
         super().__init__()
         self.embedder = build_embedder(vectors, cfg.vocab)
+        self.word_dropout = cfg.model.word_dropout
+        self.embedding_dropout = nn.Dropout(cfg.model.embedding_dropout)
         self.encoder = RNNEncoder(self.embedder.output_dim, cfg.model)
-        self.dropout = nn.Dropout(cfg.model.dropout)
+        self.rnn_dropout = nn.Dropout(cfg.model.rnn_dropout)
         self.head = nn.Linear(self.encoder.output_dim, len(TAGS))
+        self.crf = CRF()
 
     def forward(self, batch):
-        x = self.dropout(self.embedder(batch))
-        out = self.encoder(x, batch["lengths"])
-        return self.head(self.dropout(out))
+        x = self.embedder(batch)
+        if self.training and self.word_dropout:   # whole words: a name must be found from its context too
+            x = x * torch.bernoulli(x.new_full((*x.shape[:2], 1), 1 - self.word_dropout))
+        out = self.encoder(self.embedding_dropout(x), batch["lengths"])
+        return self.head(self.rnn_dropout(out))
+
+
+class StackedEmbedder(nn.Module):
+    """Every part gives each token a vector; the token gets them glued end to end."""
+
+    def __init__(self, parts):
+        super().__init__()
+        self.parts = nn.ModuleList(parts)
+        self.output_dim = sum(p.output_dim for p in parts)
+
+    def forward(self, batch):
+        return torch.cat([p(batch) for p in self.parts], -1)
+
+
+class CharCNN(nn.Module):
+    """Letters of a word -> CHAR_DIM numbers: endings (`-івка`, `-щина`), capitals, apostrophes, unknown words."""
+
+    def __init__(self):
+        super().__init__()
+        self.embedding = nn.Embedding(len(CHARS) + 2, CHAR_DIM, padding_idx=PAD)
+        self.conv = nn.Conv1d(CHAR_DIM, CHAR_DIM, kernel_size=3, padding=1)
+        self.output_dim = CHAR_DIM
+
+    def forward(self, batch):
+        chars = batch["chars"]                                                  # [batch, steps, letters]
+        b, t, n = chars.shape
+        x = self.embedding(chars.view(b * t, n)).transpose(1, 2)                # [words, dim, letters]
+        return self.conv(x).max(2).values.view(b, t, CHAR_DIM)
+
+
+class CasingEmbedder(nn.Module):
+    """word_shape (lower, Title, UPPER, digit, ...) -> CASING_DIM numbers."""
+
+    def __init__(self):
+        super().__init__()
+        self.embedding = nn.Embedding(len(SHAPES), CASING_DIM, padding_idx=PAD)
+        self.output_dim = CASING_DIM
+
+    def forward(self, batch):
+        return self.embedding(batch["shapes"])
 
 
 class LookupEmbedder(nn.Module):
@@ -65,7 +120,7 @@ class RNNEncoder(nn.Module):
             cfg.num_layers,
             batch_first=True,
             bidirectional=cfg.bidirectional,
-            dropout=cfg.dropout if cfg.num_layers > 1 else 0.0,
+            dropout=cfg.rnn_dropout if cfg.num_layers > 1 else 0.0,
         )
         directions = 2 if cfg.bidirectional else 1
         self.output_dim = directions * cfg.hidden_size
@@ -90,20 +145,25 @@ class TaggerModule(L.LightningModule):
     def forward(self, batch):
         return self.model(batch)
 
-    def loss(self, logits, labels):
-        return F.cross_entropy(logits.flatten(0, 1), labels.flatten(), ignore_index=IGNORE)
+    def loss(self, emissions, batch):
+        """CRF loss; IGNORE (-100, the only token of an empty post) counts as O."""
+        return self.model.crf.nll(emissions, batch["labels"].clamp_min(0), lengths_mask(batch))
+
+    def probs(self, batch):
+        """P(tag) of every token given the whole post: what decoding, rampart and the ensemble read."""
+        return self.model.crf.marginals(self(batch), lengths_mask(batch))
 
     def training_step(self, batch, batch_idx):
-        loss = self.loss(self(batch), batch["labels"])
+        loss = self.loss(self(batch), batch)
         self.log("train/loss", loss, prog_bar=True, batch_size=len(batch["idx"]))
         return loss
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
         """-> token probabilities, for the F1 callback in src.train."""
-        logits = self(batch)
+        emissions = self(batch)
         name = EVAL_SETS[dataloader_idx]
-        self.log(f"{name}/loss", self.loss(logits, batch["labels"]), add_dataloader_idx=False, batch_size=len(batch["idx"]))
-        return logits.float().softmax(-1)
+        self.log(f"{name}/loss", self.loss(emissions, batch), add_dataloader_idx=False, batch_size=len(batch["idx"]))
+        return self.model.crf.marginals(emissions, lengths_mask(batch))
 
     def on_save_checkpoint(self, checkpoint):
         checkpoint["config"] = self.cfg

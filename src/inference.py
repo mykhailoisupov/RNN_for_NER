@@ -40,7 +40,7 @@ def _word_probs(model, examples, batch_size, on):
     probs = [None] * len(examples)
     for batch in DataLoader(NERDataset(examples), batch_sampler=sampler, collate_fn=collate):
         batch = {k: v.to(model.device) if torch.is_tensor(v) else v for k, v in batch.items()}
-        for row, i in zip(model(batch).float().softmax(-1).cpu().numpy(), batch["idx"].tolist()):
+        for row, i in zip(model.probs(batch).cpu().numpy(), batch["idx"].tolist()):
             probs[i] = row[examples[i].word_starts]
     return probs
 
@@ -63,7 +63,8 @@ def predict_probs(model, examples, batch_size, window=WINDOW, overlap=OVERLAP, o
             continue
         assert ex.word_starts == list(range(len(ex.tokens))), "windows need one model token per word"
         for a, b in windows(len(ex.tokens), window, overlap):
-            pieces.append(Example(ex.text, ex.tokens[a:b], [], ex.ids[a:b], ex.labels[a:b], list(range(b - a))))
+            pieces.append(Example(ex.text, ex.tokens[a:b], [], ex.ids[a:b], ex.labels[a:b], list(range(b - a)),
+                                  ex.chars[a:b], ex.shapes[a:b]))
             owners.append((i, a))
     sums = [np.zeros((len(ex.word_starts), 3)) for ex in examples]
     counts = [np.zeros(len(ex.word_starts)) for ex in examples]

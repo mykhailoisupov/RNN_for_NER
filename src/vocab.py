@@ -1,4 +1,5 @@
-"""Word -> ids the model looks up: fastText rows, BPEmb pieces, or nothing (Flair reads the words themselves)."""
+"""Word -> ids the model looks up: fastText rows, BPEmb pieces, or nothing (Flair reads the words themselves);
+also the characters and the shape of every word."""
 import gzip
 import urllib.request
 from collections import Counter
@@ -11,6 +12,14 @@ from src.project import EMBEDDINGS_DIR
 FASTTEXT_URL = "https://dl.fbaipublicfiles.com/fasttext/vectors-crawl/cc.uk.300.vec.gz"
 PAD, UNK = 0, 1
 EMBEDDING_DIM = 300   # cc.uk.300 and the BPEmb we load
+EMBEDDINGS = ("fasttext", "bpemb", "flair", "fasttext+flair")   # Flair stacks on fastText only: one id per word
+
+# Characters after prepare(); any other is UNK. Fixed, so a checkpoint needs no character vocabulary.
+_LETTERS = "абвгґдеєжзиіїйклмнопрстуфхцчшщьюяёъыэ" + "abcdefghijklmnopqrstuvwxyz"
+CHARS = _LETTERS + _LETTERS.upper() + "0123456789" + "'-.,:;!?()[]«»\"/%№&+*=_<>$€°"
+CHAR_IDS = {c: i + 2 for i, c in enumerate(CHARS)}   # 0 PAD, 1 UNK
+MAX_WORD_CHARS = 20
+SHAPES = ["pad", "lower", "title", "upper", "mixed", "digit", "punct", "newline"]
 
 
 def fasttext_vectors():
@@ -92,18 +101,41 @@ class NoVocab:
         return [UNK]
 
 
+def encode_chars(word):
+    return tuple(CHAR_IDS.get(c, UNK) for c in word[:MAX_WORD_CHARS])
+
+
+def word_shape(word):
+    """`Київ` title, `КИЇВ` upper, `київ` lower: the capital letter that a lowercased fastText row loses."""
+    if "\n" in word:
+        name = "newline"
+    elif any(c.isdigit() for c in word):
+        name = "digit"
+    elif not any(c.isalpha() for c in word):
+        name = "punct"
+    elif word.islower():
+        name = "lower"
+    elif word.isupper() and len(word) > 1:
+        name = "upper"
+    elif word[0].isupper() and word[1:] == word[1:].lower():
+        name = "title"
+    else:
+        name = "mixed"
+    return SHAPES.index(name)
+
+
 def build_vocab(cfg: VocabConfig, splits):
-    if cfg.embedding == "fasttext":
+    if cfg.embedding not in EMBEDDINGS:
+        raise ValueError(f"unknown embedding: {cfg.embedding}, one of {EMBEDDINGS}")
+    if "fasttext" in cfg.embedding:
         return fasttext_vocab(splits, cfg.min_freq)
     if cfg.embedding == "bpemb":
         return BpeVocab(cfg.bpe_vocab_size)
-    if cfg.embedding == "flair":
-        return NoVocab()
-    raise ValueError(f"unknown embedding: {cfg.embedding}")
+    return NoVocab()
 
 
 def saved_vocab(cfg: VocabConfig, words):
     """The vocabulary of a checkpoint: its fastText words, or rebuilt from the config."""
-    if cfg.embedding == "fasttext":
+    if "fasttext" in cfg.embedding:
         return FastTextVocab(words)
     return build_vocab(cfg, None)

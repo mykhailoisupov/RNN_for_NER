@@ -15,8 +15,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src.label_policy import (CAPITAL, HOUSE, LOWERABLE, REGION_ADJ, STREET_ANY, in_org_name, is_common_noun,
-                              settlement_start, trim)
+from src.label_policy import CAPITAL, KYIV, LOWERABLE, REGION_ADJ, TRAIN_POLICY, clean_spans, relabel
 from src.tags import aligned
 from src.text import parse_spans, prepare, tokenize
 
@@ -24,6 +23,7 @@ DATA = Path(__file__).resolve().parent.parent / "data"
 OUT = DATA / "normalized"
 
 RU_SHARE, VAL_RU_SHARE = 0.20, 0.08
+TG_SHARE = 0.25                           # posts from Telegram sentences (scripts.fetch_ubertext), train and val
 VAL_PCT, VAL_PCT_RARE = 5, 20             # % of uk sentences sent to val: ordinary / with Kyiv or a street
 UPSAMPLE_KYIV, UPSAMPLE_STREET = 4, 4
 HOUSE_NUMBER_P = 0.5
@@ -52,7 +52,7 @@ STATS = Counter()
 STREET =r"(?:вул\.|ул\.|вулиц[яіюе]|улиц[аыуеу]|проспект(?:і|у|ом|а|е)?|просп\.|провул(?:ок|ку)|переул(?:ок|ке)|бульвар(?:і|у|а|е)?|бул\.|площ(?:а|і|у|адь|ади)|набережн\w*)"
 PROBES = {
     "Ukraine": re.compile(r"\b(?:Україн(?:а|и|і|у|ою)|Украин(?:а|ы|е|у|ой))\b", re.I),
-    "Kyiv": re.compile(r"\b(?:Київ|Києва|Києві|Києву|Києвом|Киев|Киева|Киеве|Киеву|Киевом)\b", re.I),
+    "Kyiv": KYIV,
 }
 WORD = re.compile(r"\w+(?:['-]\w+)*")
 FORM = re.compile(r"(?<![\w'’ʼ-])[А-ЯІЇЄҐA-Z][\w'’ʼ]+(?![\w'’ʼ-])")   # one capitalised word
@@ -63,23 +63,6 @@ CAPS_WORD = re.compile(r"(?<!\w)[A-ZА-ЯІЇЄҐЁ]{4,}(?!\w)")
 def caps_line(text):
     """Has the post a line of 8+ letters with no lowercase one?"""
     return any(sum(c.isalpha() for c in line) >= 8 and line == line.upper() for line in text.split("\n"))
-
-
-def clean_spans(text, spans):
-    """Merge touching spans, trim edge whitespace, drop spans without letters or digits."""
-    merged = []
-    for a, b in sorted(spans):
-        if merged and a <= merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(b, merged[-1][1]))
-        else:
-            merged.append((a, b))
-    cleaned = []
-    for a, b in merged:
-        chunk = text[a:b]
-        a, b = a + len(chunk) - len(chunk.lstrip()), b - (len(chunk) - len(chunk.rstrip()))
-        if a < b and any(c.isalnum() for c in text[a:b]):
-            cleaned.append((a, b))
-    return cleaned
 
 
 def normalize_text(text):
@@ -101,46 +84,6 @@ def features(text, spans):
 
 # --- relabelling one sentence, same rules for uk and ru -------------------------------
 TCH = re.compile(r"\s[-–—]\s[^-–—]{1,40}\s[-–—]\s*TCH\.?\s*$")
-# ponytail: only unambiguous forms. `площадь России`, `вулиці Києва`, `набережная Невы` are not streets,
-# so those type words are left out and a few true streets keep the old boundary. Add a name-frequency
-# guard if street recall matters more than this.
-TYPE_BEFORE = re.compile(r"(?<!\w)(?:вул\.|ул\.|вулиц(?:я|ю|ею)|улиц(?:а|е|у|ей)|просп\.|проспект(?:і|у|ом|а|е)?"
-                         r"|провул(?:ок|ку|ка)|переул(?:ок|ке|ка)|бульвар(?:і|у|а|е|ом)?|бул\.|пл\.|площади"
-                         r"|набережной)\s*$", re.I)
-# Singular only: `районах` after a list of names is not part of one name.
-AREA_AFTER = re.compile(r"\s+(?:район(?:і|у|ом|а|е)?|област(?:ь|і|и|ю|ью)|обл\.|р-н|кра(?:й|я|е|ю|ем)"
-                        r"|республ[іи]к(?:а|и|е|у|ою|ой)|республіці)(?!\w)", re.I)
-ADJECTIVE_END = re.compile(r"(?:ськ|цьк|зьк|ск|цк)\w{1,3}$")   # `Донецької`, not `района` or `Росією`
-
-
-# Test labels a facility with its type word (`Михайлівського собору`, `парку Шевченка`): LB −0.007 without them.
-FACILITY = (r"(?:собор(?:у|і|ом|а|е)?|лавр(?:а|и|і|у|ою|е)|парк(?:у|і|ом|а|е)?|сквер(?:у|і|ом|а|е)?|мост(?:у|і|ом|а|е)?"
-            r"|шляхопров(?:ід|оду|оді|одом)|аеропорт(?:у|і|ом|а|е)?|аэропорт(?:у|ом|а|е)?|ТРЦ|ТЦ|ЖК)(?!\w)")
-NAME_WORD = r"[А-ЯІЇЄҐA-Z][\w'’ʼ]*(?:-[А-ЯІЇЄҐA-Z]?[\w'’ʼ]+)*"
-#  `Михайлівського собору`, `Крымский мост`: a capitalised adjective, then the type
-FACILITY_AFTER = re.compile(rf"{NAME_WORD}(?:ого|ому|ий|ій|ої|ою|им|ім|ый|ая|ой|ую|(?:ськ|цьк|зьк|ов|ев|єв|ин|н)[ау])"
-                            rf"\s+(?:{FACILITY}|міст(?!\w))")   # `міст Вінниця` is `cities`, so only here
-#  `парку Шевченка`, `ТЦ "Аркадія"`: the type, then a quoted name or 1-2 capitalised words
-FACILITY_BEFORE = re.compile(rf"(?<!\w)(?P<type>(?i:{FACILITY}))\s+(?:(?P<quoted>[«\"„“][^»\"”“\n]{{1,40}}[»\"”“])"
-                             rf"|{NAME_WORD}(?:\s+{NAME_WORD})?)")
-
-
-def _facilities(text, spans):
-    out = list(spans)
-    for m in [*FACILITY_AFTER.finditer(text), *FACILITY_BEFORE.finditer(text)]:
-        a, b = m.span()
-        inside = [(c, d) for c, d in out if c < b and a < d]
-        if (a, b) in inside or any(c < a or b < d for c, d in inside):
-            continue                    # labelled whole already, or a span runs past the facility
-        if m.re is FACILITY_AFTER and not inside:
-            continue                    # `Об'єднавчого собору`, `Міжнародний аеропорт`: only extend a labelled name
-        if m.re is FACILITY_BEFORE and not m["quoted"] and (inside or m["type"].lower().startswith("собор")
-                                                            or not re.search(r"[аяиіїу]$", m.group())):
-            continue    # `вокзалі Каїра`: a labelled name is a city; `собору Вселенського`: a council;
-                        # `директор парку Олег Деркач`: a person, the name of a facility is genitive (`парку Шевченка`)
-        out = [s for s in out if s not in inside] + [(a, b)]
-        STATS["facility extended to its type" if inside else "facility labelled"] += 1
-    return out
 
 
 def fix_spans(text, loc, org=()):
@@ -156,50 +99,13 @@ def fix_spans(text, loc, org=()):
         return None
     spans = clean_spans(text, loc)
     STATS["rows changed by clean_spans"] += spans != list(loc)
-    relabelled = []
-    for a, b in spans:
-        if "(" in text[a:b]:                                    # `России (СКР)`: a bracket is never inside a name
-            b = text.index("(", a)
-            STATS["span cut at a bracket"] += 1
-        new = trim(text, a, b)                                  # `Донецьку,` -> `Донецьку`
-        STATS["span edges trimmed"] += new != (a, b)
-        a, b = new
-        if a >= b:
-            continue
-        if b < len(text) and text[b - 1].isdigit() and text[b].isdigit():   # `Галицька, 9|3`
-            while b < len(text) and text[b].isdigit():
-                b += 1
-            STATS["house number completed"] += 1
-        before = TYPE_BEFORE.search(text, max(0, a - 35), a)   # ru leaves the street type outside
-        if before:
-            a = before.start()
-            STATS["street type joined"] += 1
-        house = HOUSE.match(text, b)                            # `вул. С. Бандери` -> `вул. С. Бандери, 23`
-        if house and STREET_ANY.search(text[a:b]) and not re.search(r"\d", text[a:b]):
-            b = house.end()
-            STATS["house number joined"] += 1
-        start = settlement_start(text, a)                       # `Забуччя` -> `селі Забуччя`, `метро Почайна`
-        if start < a and not any(c < a and start < d for c, d in spans):
-            a = start
-            STATS["settlement type joined"] += 1
-        after = AREA_AFTER.match(text, b) if ADJECTIVE_END.search(text, a, b) else None
-        if after:
-            b = after.end()
-            STATS["area type joined"] += 1
-        relabelled.append((a, b))
-    for name, regex in (("Kyiv", PROBES["Kyiv"]), ("столиця", CAPITAL)):   # test labels every mention
-        for m in regex.finditer(text):
-            if not any(c < m.end() and m.start() < d for c, d in [*relabelled, *org]):
-                relabelled.append(m.span())
-                STATS[f"{name} labelled"] += 1
-    relabelled = _facilities(text, relabelled)
-    for reason, drop in (("LOC inside ORG", lambda a, b: any(c <= a and b <= d for c, d in org)),
-                         ("LOC in org name", lambda a, b: in_org_name(text, a, b)),         # `поліція Києва`
-                         ("lowercase common noun", lambda a, b: is_common_noun(text[a:b]))):   # `пляжі`, `вулиць`
-        kept = [(a, b) for a, b in relabelled if not drop(a, b)]
-        STATS[f"{reason} removed"] += len(relabelled) - len(kept)
-        relabelled = kept
-    spans = clean_spans(text, relabelled)
+    relabelled = relabel(text, spans, TRAIN_POLICY, STATS)
+    #  A label inside an ORG span is dropped (`Динамо Київ`); a Kyiv or «столиця» mention the policy adds, if it touches
+    #  one at all: ORG offsets are shifted now and then (`Укрістгаз (Ки`).
+    added = [s for s in relabelled if s not in spans and (KYIV.fullmatch(text, *s) or CAPITAL.fullmatch(text, *s))]
+    spans = [(a, b) for a, b in relabelled
+             if not any(c <= a and b <= d or (a, b) in added and c < b and a < d for c, d in org)]
+    STATS["LOC inside ORG removed"] += len(relabelled) - len(spans)
     if _crc(text) % 5 == 0:     # `москви`, `рф`: test writes them in lowercase, train never does; 20% of sentences
         for a, b in spans:
             if LOWERABLE.fullmatch(text, a, b):
@@ -465,7 +371,7 @@ def profile(posts):
             "multiline": 100 * posts.text.str.contains("\n").mean(), "median words": f.words.median(),
             "caps line": 100 * posts.text.map(caps_line).mean(),
             "caps words / 1000": 1000 * posts.text.str.count(CAPS_WORD.pattern).sum() / f.words.sum(),
-            "ru": 100 * posts.lang.eq("ru").mean(), "posts": len(posts)}
+            "ru": 100 * posts.lang.eq("ru").mean(), "tg": 100 * posts.lang.eq("tg").mean(), "posts": len(posts)}
 
 
 # --- build ------------------------------------------------------------------------------
@@ -476,11 +382,14 @@ def _report(title):
     STATS.clear()
 
 
-def build(rebuild=False, ru_share=RU_SHARE, seed=0):
+def build(rebuild=False, ru_share=RU_SHARE, tg_share=TG_SHARE, seed=0):
     OUT.mkdir(exist_ok=True)
     sentences = {}
-    for lang in ("uk", "ru"):   # stage 1: cleaning and labels, cached because ru takes minutes
+    for lang in ("uk", "ru", "tg"):   # stage 1: cleaning and labels, cached because ru takes minutes
         path = OUT / f"{lang}_sentences.parquet"
+        if lang == "tg" and not (DATA / "tg_geo_dataset.csv").exists() and not path.exists():
+            print("no data/tg_geo_dataset.csv (python -m scripts.fetch_ubertext): posts without Telegram sentences")
+            continue
         if rebuild or not path.exists():
             load_sentences(lang).to_parquet(path)
             _report(f"{lang}: cleaning")
@@ -490,7 +399,7 @@ def build(rebuild=False, ru_share=RU_SHARE, seed=0):
 
     rng = np.random.default_rng(seed)
     result = {}
-    for split, share in (("train", ru_share), ("val", VAL_RU_SHARE)):   # stage 2: posts
+    for split, ru in (("train", ru_share), ("val", VAL_RU_SHARE)):   # stage 2: posts
         parts = {}
         for lang, sent in sentences.items():
             sent = sent[sent.split.eq(split)]
@@ -506,10 +415,12 @@ def build(rebuild=False, ru_share=RU_SHARE, seed=0):
             texts = add_caps(texts, spans, CAPS_NAME_SHARE, CAPS_SENTENCE_SHARE, CAPS_WORD_SHARE, seed)
             parts[lang] = posts.assign(text=texts, spans=spans)
             _report(f"{split} {lang}: removal of data without names")
-        wanted_ru = round(len(parts["uk"]) * share / (1 - share))
-        if wanted_ru > len(parts["ru"]):
-            print(f"  only {len(parts['ru']):,} ru posts for {wanted_ru:,} wanted: lower --ru-share or RU_DOC_MOD")
-        parts["ru"] = parts["ru"].sample(n=min(wanted_ru, len(parts["ru"])), random_state=seed)
+        shares = {lang: share for lang, share in (("ru", ru), ("tg", tg_share)) if lang in parts}
+        for lang, share in shares.items():   # shares of all posts; uk is the rest
+            wanted = round(len(parts["uk"]) * share / (1 - sum(shares.values())))
+            if wanted > len(parts[lang]):
+                print(f"  only {len(parts[lang]):,} {lang} posts for {wanted:,} wanted: lower --{lang}-share")
+            parts[lang] = parts[lang].sample(n=min(wanted, len(parts[lang])), random_state=seed)
         posts = pd.concat(parts.values()).sample(frac=1, random_state=seed).reset_index(drop=True)
         assert all(aligned(tokenize(t), s) for t, s in zip(posts.text, posts.spans))
         result[split] = posts
@@ -537,9 +448,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--rebuild", action="store_true", help="redo cleaning and labels even if cached")
     parser.add_argument("--ru-share", type=float, default=RU_SHARE)
+    parser.add_argument("--tg-share", type=float, default=TG_SHARE)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--upload", action="store_true", help="log train/val parquet to W&B for Colab")
     args = parser.parse_args()
-    build(args.rebuild, args.ru_share, args.seed)
+    build(args.rebuild, args.ru_share, args.tg_share, args.seed)
     if args.upload:
         upload()

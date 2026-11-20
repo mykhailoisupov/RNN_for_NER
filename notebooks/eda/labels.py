@@ -5,7 +5,8 @@ from collections import Counter
 import numpy as np
 import pandas as pd
 
-from scripts.build_dataset import NAME_WORD, PROBES, STATS, STREET, fix_spans
+from scripts.build_dataset import PROBES, STATS, STREET, fix_spans
+from src.label_policy import NAME_WORD
 from src.text import prepare
 
 from .test_vs_sources import comparison_text, words

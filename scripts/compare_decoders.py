@@ -15,8 +15,9 @@ import pandas as pd
 from src.config import SUBMISSION_DIR
 from src.ensemble import ensemble_probs, eval_examples
 from src.inference import load_probs
+from src.label_policy import POLICY
 from src.metric import bootstrap_delta, counts_per_post, precision_recall_f1
-from src.submission import SPAN_REPAIRS, TEST_POLICY, answers
+from src.submission import SPAN_REPAIRS, answers
 
 BASE = "rampart"
 CONFIGS = {
@@ -24,8 +25,8 @@ CONFIGS = {
     "viterbi without rampart": {"rampart": False},
     **{f"rampart -{r.__name__}": {"repairs": [x for x in SPAN_REPAIRS if x is not r]} for r in SPAN_REPAIRS},
 }
-#  val and sample are labelled without the test policy, so its steps have no score there: only test_changed
-POLICY_CONFIGS = {f"rampart -{r.__name__}": {"policy": [x for x in TEST_POLICY if x is not r]} for r in TEST_POLICY}
+#  val and sample are scored without the label policy, so its steps have no score there: only test_changed
+POLICY_CONFIGS = {f"policy -{r.__name__}": {"policy": [x for x in POLICY if x is not r]} for r in dict.fromkeys(POLICY)}
 
 
 def main(paths):

@@ -17,13 +17,13 @@ def average(members, weights, split):
     return [sum(w * p for w, p in zip(weights, posts)) / sum(weights) for posts in zip(*(m[split] for m in members))]
 
 
-def ensemble_probs(members, weights, examples):
+def ensemble_probs(members, weights, posts):
     """Weighted average per split; a split is skipped when some .npz were made on other posts or by another tokenizer
     (val changes with every build_dataset). test must match: after a tokenizer change, remake the .npz with
     src.predict."""
     probs = {}
     for split in SPLITS:
-        want = [len(ex.words) for ex in examples[split]]
+        want = [len(post.words) for post in posts[split]]
         if all(split in m and [len(r) for r in m[split]] == want for m in members):
             probs[split] = average(members, weights, split)
         else:
@@ -34,19 +34,19 @@ def ensemble_probs(members, weights, examples):
 
 def run(paths, weights, name):
     members = [load_probs(p) for p in paths]
-    examples, test_ids = load_eval(), load_test_ids()
-    probs = ensemble_probs(members, weights, examples)
+    posts, test_ids = load_eval(), load_test_ids()
+    probs = ensemble_probs(members, weights, posts)
 
     row = {}
     for split in [s for s in EVAL_SETS if s in probs]:
-        c = counts_per_post(*gold_and_predicted(examples[split], probs[split]))
+        c = counts_per_post(*gold_and_predicted(posts[split], probs[split]))
         row.update({f"{split}_{k}": v for k, v in scores(c).items()})
     table = pd.DataFrame([row])
     SUBMISSION_DIR.mkdir(exist_ok=True)
     table.to_csv(SUBMISSION_DIR / f"{name}_scores.csv", index=False)
     print(table.round(4).to_string(index=False))
 
-    for path in write_submissions(name, test_ids, examples["test"], probs["test"]):
+    for path in write_submissions(name, test_ids, posts["test"], probs["test"]):
         print("written", path)
 
 

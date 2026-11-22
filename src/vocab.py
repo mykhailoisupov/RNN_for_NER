@@ -102,7 +102,7 @@ def saved_vocab(cfg: VocabConfig, words):
     return FastTextVocab(words) if "fasttext" in cfg.embedding else NoVocab()
 
 
-# --- characters and shape: what char CNN and casing read --------------------------------------------------------
+# --- characters and shape: what CharCNN and ShapeEmbedder read --------------------------------------------------
 # Characters after prepare(); any other is UNK. Fixed, so a checkpoint needs no character vocabulary.
 _LETTERS = "абвгґдеєжзиіїйклмнопрстуфхцчшщьюяёъыэ" + "abcdefghijklmnopqrstuvwxyz"
 CHARS = _LETTERS + _LETTERS.upper() + "0123456789" + "'-.,:;!?()[]«»\"/%№&+*=_<>$€°"

@@ -20,7 +20,7 @@ from src.vocab import CHARS, PAD, SHAPES, saved_vocab
 
 RNNS = {"lstm": nn.LSTM, "gru": nn.GRU}
 CHAR_DIM = 30     # char embedding and CNN filters (Ma & Hovy, 2016)
-CASING_DIM = 8
+SHAPE_DIM = 8
 OPTIMIZERS = {
     "adamw": torch.optim.AdamW,
     "adam": torch.optim.Adam,
@@ -29,7 +29,7 @@ OPTIMIZERS = {
 }
 
 
-class LookupEmbedder(nn.Module):
+class FastTextEmbedder(nn.Module):
     """fastText rows of the vocabulary, frozen unless the config says otherwise."""
 
     def __init__(self, vectors, freeze):
@@ -114,13 +114,13 @@ class CharCNN(nn.Module):
         return out.view(b, t, CHAR_DIM)
 
 
-class CasingEmbedder(nn.Module):
-    """word_shape (lower, Title, UPPER, digit, ...) -> CASING_DIM numbers."""
+class ShapeEmbedder(nn.Module):
+    """word_shape (lower, Title, UPPER, digit, ...) -> SHAPE_DIM numbers."""
 
     def __init__(self):
         super().__init__()
-        self.embedding = nn.Embedding(len(SHAPES), CASING_DIM, padding_idx=PAD)
-        self.output_dim = CASING_DIM
+        self.embedding = nn.Embedding(len(SHAPES), SHAPE_DIM, padding_idx=PAD)
+        self.output_dim = SHAPE_DIM
 
     def forward(self, batch):
         return self.embedding(batch["shapes"])
@@ -140,10 +140,10 @@ class StackedEmbedder(nn.Module):
 
 def build_embedder(vectors, cfg: VocabConfig):
     """fastText rows (when the vocabulary has vectors) and/or Flair, then characters and word shape."""
-    parts = [LookupEmbedder(vectors, cfg.freeze_embeddings)] if vectors is not None else []
+    parts = [FastTextEmbedder(vectors, cfg.freeze_embeddings)] if vectors is not None else []
     if "flair" in cfg.embedding:
         parts.append(FlairEmbedder())
-    return StackedEmbedder(parts + [CharCNN(), CasingEmbedder()])
+    return StackedEmbedder(parts + [CharCNN(), ShapeEmbedder()])
 
 
 class RNNEncoder(nn.Module):

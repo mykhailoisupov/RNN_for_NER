@@ -48,14 +48,10 @@ def prf(y_true, y_pred):
     return dict(zip(("precision", "recall", "f1"), map(float, precision_recall_f1(counts_per_post(y_true, y_pred).sum(0)))))
 
 
-def score(examples, predictions):
-    return prf(*strings(examples, predictions))
-
-
 def oracle_f1(examples):
     """F1 of the gold tags through the answers path: what tags lose by themselves."""
-    return {f"{name}/oracle_f1": score(examples[name], [(i, np.eye(len(TAGS))[ex.labels[:len(ex.words)]])
-                                                       for i, ex in enumerate(examples[name])])["f1"]
+    return {f"{name}/oracle_f1": prf(*strings(examples[name], [(i, np.eye(len(TAGS))[ex.labels[:len(ex.words)]])
+                                                              for i, ex in enumerate(examples[name])]))["f1"]
             for name in EVAL_SETS}
 
 
@@ -87,10 +83,10 @@ class ValScore(L.Callback):
                 keep = [[[s for s in row if (hard_processing(s) in self.seen) == known] for row in rows]
                         for rows in (y_true, y_pred)]
                 module.log(f"val/f1_{label}", prf(*keep)["f1"])
-            lang = [data.val_lang[i] for i, _ in predictions]
-            for label in sorted(set(lang)):
-                rows = [k for k, source in enumerate(lang) if source == label]
-                module.log(f"val/f1_{label}", prf([y_true[k] for k in rows], [y_pred[k] for k in rows])["f1"])
+            counts = counts_per_post(y_true, y_pred)
+            lang = np.array([data.val_lang[i] for i, _ in predictions])
+            for label in np.unique(lang):
+                module.log(f"val/f1_{label}", float(precision_recall_f1(counts[lang == label].sum(0))[2]))
 
 
 def run(cfg: Config):
@@ -107,7 +103,7 @@ def run(cfg: Config):
         name=name,
         config=dataclasses.asdict(cfg),
         mode=cfg.wandb_mode,
-        log_model="all",
+        log_model=True,
     )
     logger.watch(model.model, log="gradients", log_freq=200)
     logger.experiment.summary.update(oracle_f1(data.examples))

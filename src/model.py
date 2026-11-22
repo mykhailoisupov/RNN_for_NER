@@ -252,7 +252,7 @@ class TaggerModule(L.LightningModule):
         if opt.scheduler == "none":
             return optimizer
         if opt.scheduler == "plateau":
-            scheduler = ReduceLROnPlateau(optimizer, mode="max", factor=0.5, patience=1)
+            scheduler = ReduceLROnPlateau(optimizer, mode="max", factor=0.5, patience=0)
             return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "monitor": self.cfg.monitor}}
         steps = self.trainer.estimated_stepping_batches
         if opt.scheduler == "cosine":

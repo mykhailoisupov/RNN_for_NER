@@ -56,11 +56,12 @@ class FastTextVocab:
 
 
 def fasttext_vocab(splits, min_freq):
-    """Words of every split that cc.uk.300 knows or train has `min_freq` times; unknown ones get random rows."""
+    """Words of every split ({name: [Post]}) that cc.uk.300 knows or train has `min_freq` times; unknown ones get random
+    rows."""
     index, matrix = fasttext_vectors()
     assert matrix.shape[1] == EMBEDDING_DIM
-    counts = Counter(t.text for _, tokens, _ in splits["train"] for t in tokens)
-    seen = {t.text for rows in splits.values() for _, tokens, _ in rows for t in tokens}
+    counts = Counter(word for post in splits["train"] for word in post.words)
+    seen = {word for posts in splits.values() for post in posts for word in post.words}
 
     def row(word):
         # prepare() turns every apostrophe into ', which cc.uk.300 never has: it spells such words

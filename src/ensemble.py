@@ -30,7 +30,7 @@ def ensemble_probs(members, weights, examples):
     (val changes with every build_dataset). test.csv never changes, so test must match."""
     probs = {}
     for split in SPLITS:
-        want = [len(ex.tokens) for ex in examples[split]]
+        want = [len(ex.words) for ex in examples[split]]
         if all(split in m and [len(r) for r in m[split]] == want for m in members):
             probs[split] = average(members, weights, split)
         else:

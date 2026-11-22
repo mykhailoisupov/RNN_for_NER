@@ -54,7 +54,7 @@ def score(examples, predictions):
 
 def oracle_f1(examples):
     """F1 of the gold tags through the answers path: what tags lose by themselves."""
-    return {f"{name}/oracle_f1": score(examples[name], [(i, np.eye(len(TAGS))[ex.labels[:len(ex.tokens)]])
+    return {f"{name}/oracle_f1": score(examples[name], [(i, np.eye(len(TAGS))[ex.labels[:len(ex.words)]])
                                                        for i, ex in enumerate(examples[name])])["f1"]
             for name in EVAL_SETS}
 
@@ -73,7 +73,7 @@ class ValScore(L.Callback):
         name = EVAL_SETS[dataloader_idx]
         examples = trainer.datamodule.examples[name]
         for row, i in zip(probs.cpu().numpy(), batch["idx"].tolist()):
-            self.outputs[name].append((i, row[:len(examples[i].tokens)]))
+            self.outputs[name].append((i, row[:len(examples[i].words)]))
 
     def on_validation_epoch_end(self, trainer, module):
         data = trainer.datamodule

@@ -4,11 +4,13 @@ A post longer than the window is cut into overlapping windows (the last one ends
 word's probabilities are averaged over the windows that cover it. 256/64: a bit under the longest train post
 (352 words), overlap as rampart's NER_TOKEN_OVERLAP. LB 0.66180 -> 0.66277; 128-word windows gave 0.66084.
 """
+from dataclasses import replace
+
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from src.dataset import SPLITS, BucketSampler, Example, NERDataset, collate
+from src.dataset import SPLITS, BucketSampler, NERDataset, collate
 from src.model import TaggerModule
 from src.tags import TAGS
 from src.vocab import saved_vocab
@@ -42,7 +44,7 @@ def _word_probs(model, examples, batch_size, on):
     for batch in DataLoader(NERDataset(examples), batch_sampler=sampler, collate_fn=collate):
         batch = {k: v.to(model.device) if torch.is_tensor(v) else v for k, v in batch.items()}
         for row, i in zip(model.probs(batch).cpu().numpy(), batch["idx"].tolist()):
-            probs[i] = row[:len(examples[i].tokens)]
+            probs[i] = row[:len(examples[i].words)]
     return probs
 
 
@@ -58,16 +60,16 @@ def predict_probs(model, examples, batch_size, window=WINDOW, overlap=OVERLAP, o
     """[words, 3] probabilities per example; posts longer than `window` words are read in windows."""
     pieces, owners = [], []
     for i, ex in enumerate(examples):
-        if len(ex.tokens) <= window:
+        if len(ex.words) <= window:
             pieces.append(ex)
             owners.append((i, 0))
             continue
-        for a, b in windows(len(ex.tokens), window, overlap):
-            pieces.append(Example(ex.text, ex.tokens[a:b], [], ex.ids[a:b], ex.labels[a:b], ex.chars[a:b],
-                                  ex.shapes[a:b]))
+        for a, b in windows(len(ex.words), window, overlap):
+            pieces.append(replace(ex, tokens=ex.tokens[a:b], words=ex.words[a:b], locations=[], ids=ex.ids[a:b],
+                                  labels=ex.labels[a:b], chars=ex.chars[a:b], shapes=ex.shapes[a:b]))
             owners.append((i, a))
-    sums = [np.zeros((len(ex.tokens), len(TAGS))) for ex in examples]
-    counts = [np.zeros(len(ex.tokens)) for ex in examples]
+    sums = [np.zeros((len(ex.words), len(TAGS))) for ex in examples]
+    counts = [np.zeros(len(ex.words)) for ex in examples]
     for probs, (i, a) in zip(_word_probs(model, pieces, batch_size, on), owners):
         sums[i][a:a + len(probs)] += probs
         counts[i][a:a + len(probs)] += 1

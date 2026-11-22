@@ -1,6 +1,8 @@
-"""Files -> Example -> batches: train/val built by build_dataset, sample/test as the competition gives them."""
+"""Files -> Post -> Example -> batches: train/val built by build_dataset, sample/test as the competition gives them."""
 import random
+import sys
 from dataclasses import dataclass
+from typing import NamedTuple
 
 import lightning as L
 import numpy as np
@@ -13,26 +15,44 @@ from src.config import Config
 from src.project import DATA_DIR, NORMALIZED_DIR
 from src.tags import parse_spans, spans_to_tags
 from src.tokenizer import tokenize
-from src.vocab import PAD, UNK, build_vocab, encode_chars, word_shape
+from src.vocab import MAX_WORD_CHARS, PAD, UNK, build_vocab, encode_chars, word_shape
 
 IGNORE = -100
 EVAL_SETS = ("val", "sample")    # scored every epoch; the order of val_dataloader
 SPLITS = (*EVAL_SETS, "test")  # what load_eval returns and inference predicts
 
 
+class Post(NamedTuple):
+    """A post as its file gives it, tokenized and tagged."""
+    text: str
+    tokens: list | None   # Token offsets, to cut answers from the text; None for train, which never cuts any
+    words: list           # token texts, one str object per distinct word
+    labels: list          # O/B/I of every word
+    locations: list       # gold answers
+
+
 @dataclass
 class Example:
+    """The model inputs of a post: numpy arrays, one row per word."""
     text: str
-    tokens: list
+    tokens: list | None   # see Post
+    words: list
     locations: list
-    ids: list       # one per word
-    labels: list
-    chars: list     # char ids of every word
-    shapes: list    # word_shape of every word
+    ids: np.ndarray       # int32 vocabulary ids
+    labels: np.ndarray    # int8 O/B/I; IGNORE for the UNK of an empty post
+    chars: np.ndarray     # uint8 [words, MAX_WORD_CHARS] char ids, PAD-filled
+    shapes: np.ndarray    # int8 word_shape
 
 
-def _rows(texts, spans):
-    return [(text, tokenize(text), [(int(a), int(b)) for a, b in s]) for text, s in zip(texts, spans)]
+def _posts(texts, spans, keep_tokens=True):
+    """Train keeps no Token objects: 30M of them took ~5 GB, and only answers need offsets."""
+    posts = []
+    for text, pairs in zip(texts, spans):
+        tokens = tokenize(text)
+        pairs = [(int(a), int(b)) for a, b in pairs]
+        posts.append(Post(text, tokens if keep_tokens else None, [sys.intern(t.text) for t in tokens],
+                          spans_to_tags(tokens, pairs), [text[a:b] for a, b in pairs]))
+    return posts
 
 
 def load_train(train_size, seed):
@@ -40,7 +60,7 @@ def load_train(train_size, seed):
     train = pd.read_parquet(NORMALIZED_DIR / "train.parquet", columns=["text", "spans"])
     if train_size:
         train = train.sample(min(train_size, len(train)), random_state=seed)
-    return _rows(train["text"], train["spans"])
+    return _posts(train["text"], train["spans"], keep_tokens=False)
 
 
 def load_eval():
@@ -49,25 +69,31 @@ def load_eval():
     val = pd.read_parquet(NORMALIZED_DIR / "val.parquet", columns=["text", "spans", "lang"])
     sample = pd.read_csv(DATA_DIR / "labeling_sample.csv")
     test = pd.read_csv(DATA_DIR / "test.csv")
-    rows = {
-        "val": _rows(val["text"], val["spans"]),
-        "sample": _rows(sample["text"], sample["loc_markers"].map(parse_spans)),
-        "test": _rows(test["text"], [[]] * len(test)),
+    posts = {
+        "val": _posts(val["text"], val["spans"]),
+        "sample": _posts(sample["text"], sample["loc_markers"].map(parse_spans)),
+        "test": _posts(test["text"], [[]] * len(test)),
     }
-    return rows, test["text_id"].tolist(), val["lang"].tolist()
+    return posts, test["text_id"].tolist(), val["lang"].tolist()
 
 
-def build_examples(rows, vocab):
-    """One id, tag, char ids and shape per word; an empty post gets one UNK that the loss ignores."""
+def _char_row(word):
+    row = np.zeros(MAX_WORD_CHARS, np.uint8)
+    ids = encode_chars(word)
+    row[:len(ids)] = ids
+    return row
+
+
+def build_examples(posts, vocab):
+    """One id, tag, char ids and shape per word. An empty post gets one UNK, which the loss counts as O."""
     cache, examples = {}, []
-    for text, tokens, spans in rows:
-        for token in tokens:
-            if token.text not in cache:
-                cache[token.text] = vocab.encode(token.text), encode_chars(token.text), word_shape(token.text)
-        ids, chars, shapes = map(list, zip(*([cache[t.text] for t in tokens] or [(UNK, (PAD,), PAD)])))
-        labels = spans_to_tags(tokens, spans) or [IGNORE]
-        locations = [text[a:b] for a, b in spans]
-        examples.append(Example(text, tokens, locations, ids, labels, chars, shapes))
+    for post in posts:
+        for word in post.words:
+            if word not in cache:
+                cache[word] = vocab.encode(word), _char_row(word), word_shape(word)
+        ids, chars, shapes = zip(*([cache[w] for w in post.words] or [(UNK, np.zeros(MAX_WORD_CHARS, np.uint8), PAD)]))
+        examples.append(Example(post.text, post.tokens, post.words, post.locations, np.array(ids, np.int32),
+                                np.array(post.labels or [IGNORE], np.int8), np.stack(chars), np.array(shapes, np.int8)))
     return examples
 
 
@@ -80,8 +106,7 @@ class NERDataset(Dataset):
 
     def __getitem__(self, i):
         example = self.examples[i]
-        words = [t.text for t in example.tokens]
-        return i, torch.tensor(example.ids), torch.tensor(example.labels), words, example.chars, torch.tensor(example.shapes)
+        return i, example.ids, example.labels, example.words, example.chars, example.shapes
 
 
 class BucketSampler(Sampler):
@@ -107,25 +132,24 @@ class BucketSampler(Sampler):
         return full * -(-self.pool // self.batch_size) + -(-rest // self.batch_size)
 
 
-def pad_chars(chars):
-    """Char ids of every word of every post -> [posts, words, chars], PAD-filled."""
-    length = max(len(word) for post in chars for word in post)
-    width = max(len(post) for post in chars)
-    empty = (PAD,) * length
-    return torch.tensor([[word + (PAD,) * (length - len(word)) for word in post] + [empty] * (width - len(post))
-                         for post in chars])
+def _pad(arrays, value):
+    return pad_sequence([torch.from_numpy(a).long() for a in arrays], batch_first=True, padding_value=value)
 
 
 def collate(batch):
     idx, ids, labels, words, chars, shapes = zip(*batch)
+    width = max(1, max(int((c != PAD).sum(1).max()) for c in chars))   # the longest word of the batch
+    char_ids = torch.zeros(len(chars), max(map(len, ids)), width, dtype=torch.long)
+    for k, c in enumerate(chars):
+        char_ids[k, :len(c)] = torch.from_numpy(c[:, :width])
     return {
         "idx": torch.tensor(idx),
         "words": list(words),
-        "ids": pad_sequence(ids, batch_first=True, padding_value=PAD),
-        "labels": pad_sequence(labels, batch_first=True, padding_value=IGNORE),
+        "ids": _pad(ids, PAD),
+        "labels": _pad(labels, IGNORE),
         "lengths": torch.tensor([len(x) for x in ids]),
-        "chars": pad_chars(chars),
-        "shapes": pad_sequence(shapes, batch_first=True, padding_value=PAD),
+        "chars": char_ids,
+        "shapes": _pad(shapes, PAD),
     }
 
 
@@ -138,11 +162,10 @@ class NERDataModule(L.LightningDataModule):
     def setup(self, stage=None):
         if self.examples is not None:
             return
-        rows, self.test_ids, self.val_lang = load_eval()
-        rows = {"train": load_train(self.cfg.data.train_size, self.cfg.seed), **rows}
-        self.vocab = build_vocab(self.cfg.vocab, rows)
-        self.vectors = self.vocab.vectors
-        self.examples = {name: build_examples(r, self.vocab) for name, r in rows.items()}
+        posts, self.test_ids, self.val_lang = load_eval()
+        posts = {"train": load_train(self.cfg.data.train_size, self.cfg.seed), **posts}
+        self.vocab = build_vocab(self.cfg.vocab, posts)
+        self.examples = {name: build_examples(p, self.vocab) for name, p in posts.items()}
 
     def loader(self, name, shuffle=False):
         examples = self.examples[name]

@@ -1,7 +1,10 @@
-"""Entity merging ported from rampart, src/ner/classifier.ts (mergeBioTokens, repairSpans and helpers).
+"""Entity merging ported from rampart, src/ner/classifier.ts (mergeBioTokens, repairSpans and helpers), run on
+Viterbi tags.
 
-Input is an independent per-word classification, as transformers.js returns it: O words are dropped, the rest
-carry their tag and its probability. Because O words are gone, `B O I` merges into one span across the O word.
+A name gets the mean probability of its words' tags. Names of at least MIN_SCORE are kept; weaker ones of at least
+EXTEND_SCORE survive only when a chain of connectors (space, apostrophe, hyphen, an initial's period) joins them to a
+kept one. Neighbours across a connector are merged. Rampart's rescue of capitalised particles and other thresholds
+lost on val: docs/historic/postprocessing.md.
 """
 import re
 
@@ -9,30 +12,20 @@ from src.tags import B, O
 
 MIN_SCORE = 0.4        # anchors: spans at least this confident
 EXTEND_SCORE = 0.15    # weaker spans survive only next to an anchor
-MAX_ITERS = 32
 CONNECTOR_RE = re.compile(r"[\s'’.-]*")
-# Python's re has no \p{Lu}/\p{L}: capitals of the Latin and Cyrillic scripts in our data, and any letter.
-UPPER = "[A-ZÀ-ÖØ-ÞА-ЯЁІЇЄҐЎ]"
-PARTICLE = rf"{UPPER}(?:[^\W\d_]|['’]){{0,3}}"
-LEFT_PARTICLE_RE = re.compile(rf"({PARTICLE})([\s'’.-]{{1,3}})$")
-RIGHT_PARTICLE_RE = re.compile(rf"([\s'’.-]{{1,3}})({PARTICLE})")
 
 
 def merge_bio_tokens(tokens):
-    """tokens: (tag, start, end, score) of the non-O words in order -> spans {start, end, score}, score = mean."""
-    out, current = [], None
+    """tokens: (tag, start, end, score) of the non-O words in order -> spans {start, end, score}, score = mean.
+    Viterbi puts no I after O, so a span is a B and the I words right after it."""
+    groups = []
     for tag, start, end, score in tokens:
-        if current is not None and tag != B:
-            current["end"] = end
-            current["score"] += score
-            current["count"] += 1
+        if groups and tag != B:
+            groups[-1][1] = end
+            groups[-1][2].append(score)
         else:
-            if current is not None:
-                out.append({"start": current["start"], "end": current["end"], "score": current["score"] / current["count"]})
-            current = {"start": start, "end": end, "score": score, "count": 1}
-    if current is not None:
-        out.append({"start": current["start"], "end": current["end"], "score": current["score"] / current["count"]})
-    return out
+            groups.append([start, end, [score]])
+    return [{"start": a, "end": b, "score": sum(s) / len(s)} for a, b, s in groups]
 
 
 def is_initial_char(raw, idx):
@@ -55,60 +48,24 @@ def merge_adjacent_connectors(raw, spans):
     merged = []
     for span in sorted(spans, key=lambda s: (s["start"], s["end"])):
         if merged and can_bridge(raw, merged[-1], span):
-            previous = merged[-1]
-            merged[-1] = {**previous, "end": max(previous["end"], span["end"]), "score": max(previous["score"], span["score"])}
+            merged[-1] = {**merged[-1], "end": max(merged[-1]["end"], span["end"])}
         else:
             merged.append(dict(span))
     return merged
 
 
-def rescue_capitalized_particles(raw, span, spans, self_index):
-    """Extend a span over an untagged capitalised particle of up to 4 letters (`Van`, `J.`), never into a neighbour."""
-    left_bound, right_bound = 0, len(raw)
-    for i, other in enumerate(spans):
-        if i == self_index:
-            continue
-        if left_bound < other["end"] <= span["start"]:
-            left_bound = other["end"]
-        if span["end"] <= other["start"] < right_bound:
-            right_bound = other["start"]
-    start, end = span["start"], span["end"]
-    left = LEFT_PARTICLE_RE.search(raw[:start])
-    if left and ("." not in left[2] or len(left[1]) == 1) and start - len(left[0]) >= left_bound:
-        start -= len(left[0])
-    right = RIGHT_PARTICLE_RE.match(raw, end)
-    if right and "." not in right[1] and right.end() <= right_bound:
-        end = right.end()
-    return span if (start, end) == (span["start"], span["end"]) else {**span, "start": start, "end": end}
+def repair_spans(raw, spans):
+    """Spans of at least MIN_SCORE and the weaker ones a chain of connectors joins to them, neighbours merged."""
+    kept = [s for s in spans if s["score"] >= MIN_SCORE]
+    candidates = [s for s in spans if s["score"] < MIN_SCORE]
+    while moved := [c for c in candidates if any(can_bridge(raw, c, k) for k in kept)]:
+        kept += moved
+        candidates = [c for c in candidates if c not in moved]
+    return merge_adjacent_connectors(raw, kept)
 
 
-def repair_spans(raw, spans, anchor_score=MIN_SCORE, extend_score=EXTEND_SCORE, rescue=False):
-    kept = [dict(s) for s in spans if s["score"] >= anchor_score]
-    candidates = [dict(s) for s in spans if extend_score <= s["score"] < anchor_score]
-    for _ in range(MAX_ITERS):
-        changed = False
-        for i in range(len(candidates) - 1, -1, -1):
-            if any(can_bridge(raw, candidates[i], span) for span in kept):
-                kept.append(candidates.pop(i))
-                changed = True
-        merged = merge_adjacent_connectors(raw, kept)
-        if [(s["start"], s["end"]) for s in merged] != [(s["start"], s["end"]) for s in kept]:
-            changed = True
-        kept = merged
-        if rescue:
-            for i in range(len(kept)):
-                repaired = rescue_capitalized_particles(raw, kept[i], kept, i)
-                if repaired is not kept[i]:
-                    kept[i] = repaired
-                    changed = True
-        if not changed:
-            break
-    return sorted(kept, key=lambda s: (s["start"], s["end"]))
-
-
-def rampart_spans(raw, offsets, probs, tags, min_score=MIN_SCORE, extend_score=EXTEND_SCORE, rescue=False):
+def rampart_spans(raw, offsets, probs, tags):
     """Viterbi tags + their probabilities -> (start, end) spans after rampart's merge and repair."""
     tokens = [(t, a, b, float(probs[k, t])) for k, (t, (a, b)) in enumerate(zip(tags, offsets)) if t != O]
-    spans = [s for s in merge_bio_tokens(tokens) if s["score"] >= extend_score and s["end"] > s["start"]]
-    return [(s["start"], s["end"]) for s in repair_spans(raw, spans, min_score, extend_score, rescue)]
-
+    spans = [s for s in merge_bio_tokens(tokens) if s["score"] >= EXTEND_SCORE]
+    return [(s["start"], s["end"]) for s in repair_spans(raw, spans)]

@@ -8,32 +8,18 @@ import json
 
 import pandas as pd
 
-from src.decoding import decode
-from src.label_policy import POLICY, relabel, trim_edges
+from src.config import SUBMISSION_DIR
+from src.decoding import SPAN_REPAIRS, decode
+from src.label_policy import POLICY, relabel
 from src.metric import hard_processing
-from src.project import SUBMISSION_DIR
 from src.tokenizer import prepare
-
-
-def split_at_newlines(text, spans):
-    """A name never runs over a line break: rampart joins `Межовій\\n\\nКиївщина`, two lines of a list."""
-    out = []
-    for a, b in spans:
-        cuts = [k for k in range(a, b) if text[k] == "\n"]
-        out += [(c, d) for c, d in zip([a] + [k + 1 for k in cuts], cuts + [b]) if c < d]
-    return out
-
-
-SPAN_REPAIRS = [split_at_newlines, trim_edges]   # what the decoder gets wrong, on every split
 
 
 def answers(example, probs, rampart=True, repairs=SPAN_REPAIRS, policy=POLICY):
     """Word probabilities of one post -> its answers: tags, spans, repairs, the label policy (not for val and sample:
     `policy=[]` scores the model alone), strings. The metric compares sets; an empty string is a false positive."""
     text = example.text
-    spans = decode(text, example.tokens, probs, rampart)
-    for repair in repairs:
-        spans = repair(text, spans)
+    spans = decode(text, example.tokens, probs, rampart, repairs)
     if policy:
         spans = relabel(prepare(text), spans, policy)   # the text train was relabelled on: no footers, plain spaces
     return list(dict.fromkeys(s for s in (text[a:b] for a, b in spans) if hard_processing(s)))

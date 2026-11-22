@@ -6,10 +6,10 @@ import argparse
 
 import pandas as pd
 
+from src.config import SUBMISSION_DIR
 from src.dataset import SPLITS, load_eval, load_test_ids
-from src.inference import load_probs
 from src.metric import counts_per_post, scores
-from src.project import SUBMISSION_DIR
+from src.predict import load_probs
 from src.submission import answers, write_submissions
 
 

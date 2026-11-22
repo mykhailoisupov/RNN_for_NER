@@ -20,8 +20,8 @@ import numpy as np
 import pandas as pd
 
 from src.colab import load_env
+from src.config import DATA_DIR, NORMALIZED_DIR, ROOT, WANDB_ENTITY, WANDB_PROJECT
 from src.label_policy import JOINS, LOWERABLE, REGION_ADJ, REST, STREET, can_be, clean_spans, join_house_number, relabel
-from src.project import DATA_DIR, NORMALIZED_DIR, ROOT, WANDB_ENTITY, WANDB_PROJECT
 from src.tags import aligned, parse_spans
 from src.tokenizer import prepare, tokenize
 

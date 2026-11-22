@@ -11,15 +11,14 @@ import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset, Sampler
 
-from src.config import Config
-from src.project import DATA_DIR, NORMALIZED_DIR
+from src.config import DATA_DIR, NORMALIZED_DIR, Config
 from src.tags import parse_spans, spans_to_tags
 from src.tokenizer import tokenize
 from src.vocab import MAX_WORD_CHARS, PAD, UNK, build_vocab, encode_chars, word_shape
 
 IGNORE = -100
 EVAL_SETS = ("val", "sample")    # scored every epoch; the order of val_dataloader
-SPLITS = (*EVAL_SETS, "test")  # what load_eval returns and inference predicts
+SPLITS = (*EVAL_SETS, "test")  # what load_eval returns and src.predict predicts
 
 
 class Post(NamedTuple):

@@ -1,5 +1,19 @@
-"""Hyperparameters of a run, grouped by the component that reads them."""
+"""Where the project's things live, on disk and online, and the hyperparameters of a run, grouped by the component
+that reads them. Shared by src and scripts."""
 from dataclasses import dataclass, field, fields, is_dataclass
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+DATA_DIR = ROOT / "data"
+NORMALIZED_DIR = DATA_DIR / "normalized"     # train/val of scripts.build_dataset
+EMBEDDINGS_DIR = DATA_DIR / "embeddings"
+EXTERNAL_DIR = DATA_DIR / "external"
+MODELS_DIR = ROOT / "models"
+SUBMISSION_DIR = ROOT / "submission"
+
+WANDB_ENTITY = "whoresandbaddies"
+WANDB_PROJECT = "rnn-for-ner"
+KAGGLE_COMPETITION = "kse-ua-location-extraction-2026"
 
 
 @dataclass

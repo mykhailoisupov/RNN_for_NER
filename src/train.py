@@ -7,12 +7,11 @@ import wandb
 from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
 
-from src.config import Config
+from src.config import MODELS_DIR, WANDB_ENTITY, WANDB_PROJECT, Config
 from src.dataset import EVAL_SETS, SPLITS, NERDataModule
-from src.inference import load_model, predict_probs, save_probs
 from src.metric import counts_per_post, hard_processing, scores
 from src.model import TaggerModule
-from src.project import MODELS_DIR, WANDB_ENTITY, WANDB_PROJECT
+from src.predict import load_model, predict_probs, save_probs
 from src.submission import answers, write_submissions
 from src.tags import TAGS
 

@@ -13,13 +13,14 @@ import argparse
 
 import pandas as pd
 
+from src.config import SUBMISSION_DIR
 from src.dataset import load_eval
+from src.decoding import SPAN_REPAIRS
 from src.ensemble import ensemble_probs
-from src.inference import load_probs
 from src.label_policy import POLICY
 from src.metric import bootstrap_delta, counts_per_post, scores
-from src.project import SUBMISSION_DIR
-from src.submission import SPAN_REPAIRS, answers
+from src.predict import load_probs
+from src.submission import answers
 
 BASE = "rampart"
 CONFIGS = {

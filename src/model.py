@@ -195,7 +195,7 @@ class Tagger(nn.Module):
 
 
 class TaggerModule(L.LightningModule):
-    """Training of the Tagger. A checkpoint also keeps the config and the fastText words, so src.inference.load_model
+    """Training of the Tagger. A checkpoint also keeps the config and the fastText words, so src.predict.load_model
     rebuilds the model without the data."""
 
     def __init__(self, cfg: Config, vocab):

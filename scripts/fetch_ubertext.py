@@ -11,7 +11,7 @@ import argparse
 import urllib.request
 import pandas as pd
 
-from src.project import DATA_DIR, EXTERNAL_DIR
+from src.config import DATA_DIR, EXTERNAL_DIR
 
 CACHE = EXTERNAL_DIR / "ubertext-ner-silver"
 URL = "https://huggingface.co/datasets/lang-uk/UberText-NER-Silver/resolve/main/data/train-{:05d}-of-00009.parquet"

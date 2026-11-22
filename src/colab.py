@@ -1,3 +1,5 @@
+"""Setup of a Colab session for notebooks/train.ipynb: keys, packages, the W&B login, the competition data and the
+train/val of scripts.build_dataset. load_env reads the same .env locally."""
 import importlib.util
 import os
 import subprocess

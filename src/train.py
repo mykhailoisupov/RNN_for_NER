@@ -1,5 +1,10 @@
-import argparse
-import dataclasses
+"""A training run: fit the tagger, scoring val and sample every epoch, then the best checkpoint -> probs.npz of every
+split and the submission.
+
+    python -m src.train --epochs 10 --model.hidden_size 512    # one flag per Config field
+"""
+from dataclasses import asdict
+from pathlib import Path
 
 import lightning as L
 import numpy as np
@@ -7,7 +12,7 @@ import wandb
 from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
 
-from src.config import MODELS_DIR, WANDB_ENTITY, WANDB_PROJECT, Config
+from src.config import MODELS_DIR, WANDB_ENTITY, WANDB_PROJECT, Config, config_from_args, dotted_fields
 from src.dataset import EVAL_SETS, SPLITS, NERDataModule
 from src.metric import counts_per_post, hard_processing, scores
 from src.model import TaggerModule
@@ -16,15 +21,6 @@ from src.submission import gold_and_predicted, write_submissions
 from src.tags import TAGS
 
 NAME_SKIP = {"embedding", "rnn", "bidirectional", "name", "wandb_mode", "accelerator"}
-
-
-def dotted_fields(cfg: Config):
-    """(`model.hidden_size`, value) for every field of the Config and of its groups: the CLI flags and run names."""
-    for key, value in dataclasses.asdict(cfg).items():
-        if isinstance(value, dict):
-            yield from ((f"{key}.{k}", v) for k, v in value.items())
-        else:
-            yield key, value
 
 
 def run_name(cfg: Config):
@@ -81,19 +77,15 @@ class ValScore(L.Callback):
                 module.log(f"val/f1_{label}", scores(counts[lang == label])["f1"])
 
 
-def run(cfg: Config):
-    L.seed_everything(cfg.seed)
-    name = run_name(cfg)
-
-    data = NERDataModule(cfg)
-    data.setup()
+def fit(cfg: Config, name, data):
+    """Train the tagger -> the W&B logger of the run and the path of its best checkpoint, models/<name>-<id>/best.ckpt."""
     model = TaggerModule(cfg, data.vocab)
 
     logger = WandbLogger(
         project=WANDB_PROJECT,
         entity=WANDB_ENTITY,
         name=name,
-        config=dataclasses.asdict(cfg),
+        config=asdict(cfg),
         mode=cfg.wandb_mode,
         log_model=True,
     )
@@ -114,42 +106,45 @@ def run(cfg: Config):
         log_every_n_steps=50,
     )
     trainer.fit(model, datamodule=data)
-
-    model = TaggerModule.load(checkpoint.best_model_path)
-    word = {split: predict_probs(model, data.examples[split]) for split in SPLITS}
-    probs = run_dir / "probs.npz"
-    save_probs(probs, word)
-    path, raw_path = write_submissions(name, data.test_ids, data.examples["test"], word["test"])
-
     logger.experiment.summary["best/" + cfg.monitor] = checkpoint.best_model_score.item()
-    outputs = wandb.Artifact(f"submission-{logger.version}", type="submission")
-    for file in (path, raw_path, probs):
-        outputs.add_file(str(file))
-    logger.experiment.log_artifact(outputs)
+    return logger, checkpoint.best_model_path
+
+
+def export(name, data, logger, best):
+    """The best checkpoint -> probs.npz of every split next to it and the submission pair, all three logged as a W&B
+    artifact; -> the path of the submission."""
+    model = TaggerModule.load(best)
+    probs = {split: predict_probs(model, data.examples[split]) for split in SPLITS}
+    probs_path = Path(best).with_name("probs.npz")
+    save_probs(probs_path, probs)
+    paths = write_submissions(name, data.test_ids, data.examples["test"], probs["test"])
+
+    artifact = wandb.Artifact(f"submission-{logger.version}", type="submission")
+    for file in (*paths, probs_path):
+        artifact.add_file(str(file))
+    logger.experiment.log_artifact(artifact)
+    return paths[0]
+
+
+def run(cfg: Config):
+    L.seed_everything(cfg.seed)
+    name = run_name(cfg)
+    data = NERDataModule(cfg)
+    data.setup()
+
+    logger, best = fit(cfg, name, data)
+    path = export(name, data, logger, best)
     wandb.finish()
     print("submission:", path)
-    print("weights:", checkpoint.best_model_path)
+    print("weights:", best)
     try:   # Colab: the browser saves the best checkpoint; locally it stays in models/
         from google.colab import files
 
-        files.download(checkpoint.best_model_path)
+        files.download(best)
     except Exception:
         pass
     return path
 
 
-def parse_args():
-    """`--epochs 10`, `--model.hidden_size 512`: one flag per field."""
-    parser = argparse.ArgumentParser()
-    for key, default in dotted_fields(Config()):
-        kind = (lambda v: v.lower() in {"1", "true", "yes"}) if isinstance(default, bool) else type(default)
-        parser.add_argument(f"--{key}", type=kind, default=default)
-    cfg = Config()
-    for key, value in vars(parser.parse_args()).items():
-        *group, name = key.split(".")
-        setattr(getattr(cfg, group[0]) if group else cfg, name, value)
-    return cfg
-
-
 if __name__ == "__main__":
-    run(parse_args())
+    run(config_from_args())

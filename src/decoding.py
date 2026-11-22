@@ -1,34 +1,27 @@
 """Word probabilities -> spans: Viterbi that never starts a name on I, then rampart's span repair."""
-import torch
+import numpy as np
 
 from src.rampart import rampart_spans
 from src.tags import I, O, TAGS, tags_to_spans
 
 
-def viterbi(logits, lengths):
-    """Best tag path per sequence with O->I and start->I forbidden, so no span starts on I (argmax gave
-    `Михайлівського` + `собору` around an O). Returns one list of tag ids per sequence, cut to its length."""
-    logp = logits.float().log_softmax(-1)
-    ban = torch.zeros(len(TAGS), len(TAGS), device=logp.device)
-    ban[O, I] = float("-inf")
-    score = logp[:, 0].clone()
-    score[:, I] = float("-inf")
+def viterbi(probs):
+    """Best tag path of one post [words, tags] with O->I and start->I forbidden, so no span starts on I (argmax gave
+    `Михайлівського` + `собору` around an O)."""
+    logp = np.log(np.maximum(probs, 1e-9))
+    ban = np.zeros((len(TAGS), len(TAGS)))
+    ban[O, I] = -np.inf
+    score = logp[0].copy()
+    score[I] = -np.inf
     back = []
-    for t in range(1, logp.size(1)):
-        best, prev = (score.unsqueeze(2) + ban).max(1)          # [batch, prev, cur] -> [batch, cur]
-        back.append(prev)
-        alive = (t < lengths.to(logp.device)).unsqueeze(1)
-        score = torch.where(alive, best + logp[:, t], score)     # padding keeps the score of the last token
-    back = torch.stack(back, 1).tolist() if back else []
-    paths = []
-    for b, n in enumerate(lengths.tolist()):
-        tag = int(score[b].argmax())
-        path = [tag]
-        for t in range(n - 1, 0, -1):
-            tag = back[b][t - 1][tag]
-            path.append(tag)
-        paths.append(path[::-1])
-    return paths
+    for row in logp[1:]:
+        step = score[:, None] + ban              # [prev, cur]
+        back.append(step.argmax(0))
+        score = step.max(0) + row
+    path = [int(score.argmax())]
+    for prev in reversed(back):
+        path.append(int(prev[path[-1]]))
+    return path[::-1]
 
 
 def decode(text, tokens, probs, rampart=True):
@@ -36,7 +29,7 @@ def decode(text, tokens, probs, rampart=True):
     space, hyphen, apostrophe or an initial's period and drops weak names with no confident neighbour."""
     if not len(probs):
         return []
-    tags = viterbi(torch.log(torch.tensor(probs).clamp_min(1e-9))[None], torch.tensor([len(probs)]))[0]
+    tags = viterbi(probs)
     if rampart:
         return rampart_spans(text, [(t.start, t.end) for t in tokens], probs, tags)
     return tags_to_spans(tokens, tags)

@@ -33,6 +33,11 @@ def precision_recall_f1(counts):
     return precision, recall, 2 * precision * recall / np.maximum(precision + recall, 1e-12)
 
 
+def scores(counts):
+    """Precision, recall, F1 of per-post counts (posts, 3), as floats by name."""
+    return dict(zip(("precision", "recall", "f1"), map(float, precision_recall_f1(counts.sum(0)))))
+
+
 def bootstrap_delta(base, new, n=1000, seed=0):
     """95% interval of F1(new) - F1(base) over posts resampled together (a paired bootstrap)."""
     idx = np.random.default_rng(seed).integers(0, len(base), (n, len(base)))

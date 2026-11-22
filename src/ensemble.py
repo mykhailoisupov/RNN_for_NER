@@ -1,33 +1,26 @@
 """Several .npz of word probabilities -> their weighted average -> answers -> the submission csv (+ `_raw`).
 
-    python -m src.ensemble models/ensemble-probs-w256o64/{b1yzs79t,lr5hudf6,e4ob4l0j,fi9xjw14}.npz --name win256
+    python -m src.ensemble models/<run>/probs.npz models/<run>/probs.npz ... --name <name>
 """
 import argparse
 
 import pandas as pd
 
-from src.dataset import SPLITS, build_examples, load_eval, load_test_ids
+from src.dataset import SPLITS, load_eval, load_test_ids
 from src.inference import load_probs
-from src.metric import counts_per_post, precision_recall_f1
+from src.metric import counts_per_post, scores
 from src.project import SUBMISSION_DIR
-from src.submission import answers, write_submission
-from src.vocab import NoVocab
+from src.submission import answers, write_submissions
 
 
 def average(members, weights, split):
-    rows = [member[split] for member in members]
-    assert all(len(r) == len(rows[0]) for r in rows)
-    return [sum(w * r[i] for w, r in zip(weights, rows)) / sum(weights) for i in range(len(rows[0]))]
-
-
-def eval_examples():
-    posts = load_eval()
-    return {split: build_examples(posts[split], NoVocab()) for split in SPLITS}
+    return [sum(w * p for w, p in zip(weights, posts)) / sum(weights) for posts in zip(*(m[split] for m in members))]
 
 
 def ensemble_probs(members, weights, examples):
-    """Weighted average per split; a split is skipped when some .npz were made on other posts
-    (val changes with every build_dataset). test.csv never changes, so test must match."""
+    """Weighted average per split; a split is skipped when some .npz were made on other posts or by another tokenizer
+    (val changes with every build_dataset). test must match: after a tokenizer change, remake the .npz with
+    src.predict."""
     probs = {}
     for split in SPLITS:
         want = [len(ex.words) for ex in examples[split]]
@@ -41,24 +34,20 @@ def ensemble_probs(members, weights, examples):
 
 def run(paths, weights, name):
     members = [load_probs(p) for p in paths]
-    examples, test_ids = eval_examples(), load_test_ids()
+    examples, test_ids = load_eval(), load_test_ids()
     probs = ensemble_probs(members, weights, examples)
 
     row = {}
     for split in [s for s in ("val", "sample") if s in probs]:
         pred = [answers(ex, p, policy=[]) for ex, p in zip(examples[split], probs[split])]
         c = counts_per_post([ex.locations for ex in examples[split]], pred)
-        row.update(zip((f"{split}_p", f"{split}_r", f"{split}_f1"), map(float, precision_recall_f1(c.sum(0)))))
-    scores = pd.DataFrame([row])
+        row.update({f"{split}_{k}": v for k, v in scores(c).items()})
+    table = pd.DataFrame([row])
     SUBMISSION_DIR.mkdir(exist_ok=True)
-    scores.to_csv(SUBMISSION_DIR / f"{name}_scores.csv", index=False)
-    print(scores.round(4).to_string(index=False))
+    table.to_csv(SUBMISSION_DIR / f"{name}_scores.csv", index=False)
+    print(table.round(4).to_string(index=False))
 
-    test = list(zip(examples["test"], probs["test"]))
-    # `_raw`: without the test policy, to see which submission rules the relabelled train has made redundant
-    for suffix, rows in (("", [answers(ex, p) for ex, p in test]), ("_raw", [answers(ex, p, policy=[]) for ex, p in test])):
-        path = SUBMISSION_DIR / f"{name}{suffix}.csv"
-        write_submission(path, test_ids, rows)
+    for path in write_submissions(name, test_ids, list(zip(examples["test"], probs["test"]))):
         print("written", path)
 
 

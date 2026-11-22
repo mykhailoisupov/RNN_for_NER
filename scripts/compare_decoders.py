@@ -13,10 +13,11 @@ import argparse
 
 import pandas as pd
 
-from src.ensemble import ensemble_probs, eval_examples
+from src.dataset import load_eval
+from src.ensemble import ensemble_probs
 from src.inference import load_probs
 from src.label_policy import POLICY
-from src.metric import bootstrap_delta, counts_per_post, precision_recall_f1
+from src.metric import bootstrap_delta, counts_per_post, scores
 from src.project import SUBMISSION_DIR
 from src.submission import SPAN_REPAIRS, answers
 
@@ -32,7 +33,7 @@ POLICY_CONFIGS = {f"policy -{r.__name__}": {"policy": [x for x in POLICY if x is
 
 def main(paths):
     members = [load_probs(p) for p in paths]
-    examples = eval_examples()
+    examples = load_eval()
     probs = ensemble_probs(members, [1.0] * len(members), examples)
     scored = [s for s in ("val", "sample") if s in probs]   # val is gone when the .npz predate the current val
     test = list(zip(examples["test"], probs["test"]))
@@ -47,7 +48,7 @@ def main(paths):
         for split in scored:
             pred = [answers(ex, p, policy=[], **kw) for ex, p in zip(examples[split], probs[split])]
             c = counts_per_post([ex.locations for ex in examples[split]], pred)
-            row.update(zip((f"{split}_p", f"{split}_r", f"{split}_f1"), map(float, precision_recall_f1(c.sum(0)))))
+            row.update({f"{split}_{k}": v for k, v in scores(c).items()})
             if split == scored[0]:
                 counts[label] = c
         low, high = bootstrap_delta(counts[BASE], counts[label])

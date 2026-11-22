@@ -10,10 +10,10 @@ from lightning.pytorch.loggers import WandbLogger
 from src.config import Config
 from src.dataset import EVAL_SETS, SPLITS, NERDataModule
 from src.inference import load_model, predict_probs, save_probs
-from src.metric import counts_per_post, hard_processing, precision_recall_f1
+from src.metric import counts_per_post, hard_processing, scores
 from src.model import TaggerModule
-from src.project import MODELS_DIR, SUBMISSION_DIR, WANDB_ENTITY, WANDB_PROJECT
-from src.submission import answers, write_submission
+from src.project import MODELS_DIR, WANDB_ENTITY, WANDB_PROJECT
+from src.submission import answers, write_submissions
 from src.tags import TAGS
 
 NAME_SKIP = {"embedding", "rnn", "bidirectional", "name", "wandb_mode", "accelerator"}
@@ -44,14 +44,10 @@ def strings(examples, predictions):
             [answers(examples[i], probs, policy=[]) for i, probs in predictions])
 
 
-def prf(y_true, y_pred):
-    return dict(zip(("precision", "recall", "f1"), map(float, precision_recall_f1(counts_per_post(y_true, y_pred).sum(0)))))
-
-
 def oracle_f1(examples):
     """F1 of the gold tags through the answers path: what tags lose by themselves."""
-    return {f"{name}/oracle_f1": prf(*strings(examples[name], [(i, np.eye(len(TAGS))[ex.labels[:len(ex.words)]])
-                                                              for i, ex in enumerate(examples[name])]))["f1"]
+    return {f"{name}/oracle_f1": scores(counts_per_post(*strings(
+                examples[name], [(i, np.eye(len(TAGS))[ex.labels[:len(ex.words)]]) for i, ex in enumerate(examples[name])])))["f1"]
             for name in EVAL_SETS}
 
 
@@ -75,18 +71,18 @@ class ValScore(L.Callback):
         data = trainer.datamodule
         for name, predictions in self.outputs.items():
             y_true, y_pred = strings(data.examples[name], predictions)
-            for metric, value in prf(y_true, y_pred).items():
+            counts = counts_per_post(y_true, y_pred)
+            for metric, value in scores(counts).items():
                 module.log(f"{name}/{metric}", value, prog_bar=metric == "f1")
             if name != "val":
                 continue
             for label, known in (("seen", True), ("unseen", False)):   # a name is filtered in gold and predicted alike
                 keep = [[[s for s in row if (hard_processing(s) in self.seen) == known] for row in rows]
                         for rows in (y_true, y_pred)]
-                module.log(f"val/f1_{label}", prf(*keep)["f1"])
-            counts = counts_per_post(y_true, y_pred)
+                module.log(f"val/f1_{label}", scores(counts_per_post(*keep))["f1"])
             lang = np.array([data.val_lang[i] for i, _ in predictions])
             for label in np.unique(lang):
-                module.log(f"val/f1_{label}", float(precision_recall_f1(counts[lang == label].sum(0))[2]))
+                module.log(f"val/f1_{label}", scores(counts[lang == label])["f1"])
 
 
 def run(cfg: Config):
@@ -127,13 +123,7 @@ def run(cfg: Config):
     word = {split: predict_probs(model, data.examples[split], cfg.data.eval_batch_size) for split in SPLITS}
     probs = run_dir / "probs.npz"
     save_probs(probs, word)
-    test = list(zip(data.examples["test"], word["test"]))
-    SUBMISSION_DIR.mkdir(exist_ok=True)
-    path = SUBMISSION_DIR / f"{name}.csv"
-    # `_raw`: without the test policy, to see which submission rules the relabelled train has made redundant
-    raw_path = SUBMISSION_DIR / f"{name}_raw.csv"
-    write_submission(path, data.test_ids, [answers(ex, p) for ex, p in test])
-    write_submission(raw_path, data.test_ids, [answers(ex, p, policy=[]) for ex, p in test])
+    path, raw_path = write_submissions(name, data.test_ids, list(zip(data.examples["test"], word["test"])))
 
     logger.experiment.summary["best/" + cfg.monitor] = checkpoint.best_model_score.item()
     outputs = wandb.Artifact(f"submission-{logger.version}", type="submission")

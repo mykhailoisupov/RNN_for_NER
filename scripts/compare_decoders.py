@@ -32,7 +32,7 @@ POLICY_CONFIGS = {f"policy -{r.__name__}": {"policy": [x for x in POLICY if x is
 
 def main(paths):
     members = [load_probs(p) for p in paths]
-    examples, _ = eval_examples()
+    examples = eval_examples()
     probs = ensemble_probs(members, [1.0] * len(members), examples)
     scored = [s for s in ("val", "sample") if s in probs]   # val is gone when the .npz predate the current val
     test = list(zip(examples["test"], probs["test"]))

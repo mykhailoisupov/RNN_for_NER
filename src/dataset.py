@@ -64,17 +64,25 @@ def load_train(train_size, seed):
 
 
 def load_eval():
-    """val from build_dataset, sample and test as the competition gives them; also the test ids and the source
-    (uk, ru, tg) of every val post."""
-    val = pd.read_parquet(NORMALIZED_DIR / "val.parquet", columns=["text", "spans", "lang"])
+    """val from build_dataset, sample and test as the competition gives them."""
+    val = pd.read_parquet(NORMALIZED_DIR / "val.parquet", columns=["text", "spans"])
     sample = pd.read_csv(DATA_DIR / "labeling_sample.csv")
-    test = pd.read_csv(DATA_DIR / "test.csv")
-    posts = {
+    test = pd.read_csv(DATA_DIR / "test.csv", usecols=["text"])
+    return {
         "val": _posts(val["text"], val["spans"]),
         "sample": _posts(sample["text"], sample["loc_markers"].map(parse_spans)),
         "test": _posts(test["text"], [[]] * len(test)),
     }
-    return posts, test["text_id"].tolist(), val["lang"].tolist()
+
+
+def load_test_ids():
+    """text_id of every test post, in the order of load_eval: the submission's key."""
+    return pd.read_csv(DATA_DIR / "test.csv", usecols=["text_id"])["text_id"].tolist()
+
+
+def load_val_langs():
+    """Source (uk, ru, tg) of every val post, in the order of load_eval: val F1 per source."""
+    return pd.read_parquet(NORMALIZED_DIR / "val.parquet", columns=["lang"])["lang"].tolist()
 
 
 def _char_row(word):
@@ -162,8 +170,8 @@ class NERDataModule(L.LightningDataModule):
     def setup(self, stage=None):
         if self.examples is not None:
             return
-        posts, self.test_ids, self.val_lang = load_eval()
-        posts = {"train": load_train(self.cfg.data.train_size, self.cfg.seed), **posts}
+        self.test_ids, self.val_lang = load_test_ids(), load_val_langs()
+        posts = {"train": load_train(self.cfg.data.train_size, self.cfg.seed), **load_eval()}
         self.vocab = build_vocab(self.cfg.vocab, posts)
         self.examples = {name: build_examples(p, self.vocab) for name, p in posts.items()}
 

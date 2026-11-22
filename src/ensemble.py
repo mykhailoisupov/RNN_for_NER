@@ -6,7 +6,7 @@ import argparse
 
 import pandas as pd
 
-from src.dataset import SPLITS, build_examples, load_eval
+from src.dataset import SPLITS, build_examples, load_eval, load_test_ids
 from src.inference import load_probs
 from src.metric import counts_per_post, precision_recall_f1
 from src.project import SUBMISSION_DIR
@@ -21,8 +21,8 @@ def average(members, weights, split):
 
 
 def eval_examples():
-    rows, test_ids, _ = load_eval()
-    return {split: build_examples(rows[split], NoVocab()) for split in SPLITS}, test_ids
+    posts = load_eval()
+    return {split: build_examples(posts[split], NoVocab()) for split in SPLITS}
 
 
 def ensemble_probs(members, weights, examples):
@@ -41,7 +41,7 @@ def ensemble_probs(members, weights, examples):
 
 def run(paths, weights, name):
     members = [load_probs(p) for p in paths]
-    examples, test_ids = eval_examples()
+    examples, test_ids = eval_examples(), load_test_ids()
     probs = ensemble_probs(members, weights, examples)
 
     row = {}

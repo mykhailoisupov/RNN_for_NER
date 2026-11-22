@@ -10,20 +10,17 @@ import numpy as np
 from src.config import VocabConfig
 from src.project import EMBEDDINGS_DIR
 
+PAD, UNK = 0, 1   # ids 0 and 1 of every table: words, characters
+
+
+# --- word ids: a fastText row, or none for Flair ----------------------------------------------------------------
 FASTTEXT_URL = "https://dl.fbaipublicfiles.com/fasttext/vectors-crawl/cc.uk.300.vec.gz"
-PAD, UNK = 0, 1
 EMBEDDING_DIM = 300   # cc.uk.300
 EMBEDDINGS = ("fasttext", "flair", "fasttext+flair")
 
-# Characters after prepare(); any other is UNK. Fixed, so a checkpoint needs no character vocabulary.
-_LETTERS = "абвгґдеєжзиіїйклмнопрстуфхцчшщьюяёъыэ" + "abcdefghijklmnopqrstuvwxyz"
-CHARS = _LETTERS + _LETTERS.upper() + "0123456789" + "'-.,:;!?()[]«»\"/%№&+*=_<>$€°"
-CHAR_IDS = {c: i + 2 for i, c in enumerate(CHARS)}   # 0 PAD, 1 UNK
-MAX_WORD_CHARS = 20
-SHAPES = ["pad", "lower", "title", "upper", "mixed", "digit", "punct", "newline"]
-
 
 def fasttext_vectors():
+    """cc.uk.300 as {word: row} and a memmapped matrix; the first call converts the .vec.gz to .npy."""
     source = EMBEDDINGS_DIR / "cc.uk.300.vec.gz"
     words_path = EMBEDDINGS_DIR / "cc.uk.300.words.txt"
     matrix_path = EMBEDDINGS_DIR / "cc.uk.300.npy"
@@ -42,7 +39,7 @@ def fasttext_vectors():
                 matrix[i] = np.array(values.split(), dtype=np.float32)
             matrix.flush()
         words_path.write_text("\n".join(words), encoding="utf-8")
-        matrix_path.with_suffix(".tmp.npy").rename(matrix_path)
+        matrix_path.with_suffix(".tmp.npy").rename(matrix_path)   # last, so an interrupted run starts over
     words = words_path.read_text(encoding="utf-8").split("\n")
     return {word: i for i, word in enumerate(words)}, np.load(matrix_path, mmap_mode="r")
 
@@ -61,6 +58,7 @@ class FastTextVocab:
 def fasttext_vocab(splits, min_freq):
     """Words of every split that cc.uk.300 knows or train has `min_freq` times; unknown ones get random rows."""
     index, matrix = fasttext_vectors()
+    assert matrix.shape[1] == EMBEDDING_DIM
     counts = Counter(t.text for _, tokens, _ in splits["train"] for t in tokens)
     seen = {t.text for rows in splits.values() for _, tokens, _ in rows for t in tokens}
 
@@ -73,22 +71,44 @@ def fasttext_vocab(splits, min_freq):
                     return index[f]
         return None
 
-    vocab = sorted(w for w in seen if row(w) is not None or counts[w] >= min_freq)
+    rows = {w: r for w in seen if (r := row(w)) is not None}
+    vocab = sorted(w for w in seen if w in rows or counts[w] >= min_freq)
     words = {word: i + 2 for i, word in enumerate(vocab)}
     rng = np.random.default_rng(0)
-    vectors = np.zeros((len(vocab) + 2, matrix.shape[1]), dtype=np.float32)
+    vectors = np.zeros((len(vocab) + 2, EMBEDDING_DIM), dtype=np.float32)
     for word, i in words.items():
-        r = row(word)
-        vectors[i] = matrix[r] if r is not None else rng.normal(0, 0.1, matrix.shape[1])
-    print(f"fastText vocab: {len(vocab)}, pretrained: {sum(row(w) is not None for w in vocab)}")
+        vectors[i] = matrix[rows[word]] if word in rows else rng.normal(0, 0.1, EMBEDDING_DIM)
+    print(f"fastText vocab: {len(vocab)}, pretrained: {sum(w in rows for w in vocab)}")
     return FastTextVocab(words, vectors)
 
 
 class NoVocab:
+    """Flair alone reads the words themselves: every id is UNK, kept only for lengths and masks."""
     vectors = None
 
     def encode(self, word):
         return UNK
+
+
+def build_vocab(cfg: VocabConfig, splits):
+    """The vocabulary of a new run: fastText words of the data, or none for Flair."""
+    if cfg.embedding not in EMBEDDINGS:
+        raise ValueError(f"unknown embedding: {cfg.embedding}, one of {EMBEDDINGS}")
+    return fasttext_vocab(splits, cfg.min_freq) if "fasttext" in cfg.embedding else NoVocab()
+
+
+def saved_vocab(cfg: VocabConfig, words):
+    """The vocabulary of a checkpoint: its fastText words (their rows come with the weights), or none for Flair."""
+    return FastTextVocab(words) if "fasttext" in cfg.embedding else NoVocab()
+
+
+# --- characters and shape: what char CNN and casing read --------------------------------------------------------
+# Characters after prepare(); any other is UNK. Fixed, so a checkpoint needs no character vocabulary.
+_LETTERS = "абвгґдеєжзиіїйклмнопрстуфхцчшщьюяёъыэ" + "abcdefghijklmnopqrstuvwxyz"
+CHARS = _LETTERS + _LETTERS.upper() + "0123456789" + "'-.,:;!?()[]«»\"/%№&+*=_<>$€°"
+CHAR_IDS = {c: i + 2 for i, c in enumerate(CHARS)}   # 0 PAD, 1 UNK
+MAX_WORD_CHARS = 20
+SHAPES = ["pad", "lower", "title", "upper", "mixed", "digit", "punct", "newline"]
 
 
 def encode_chars(word):
@@ -112,14 +132,3 @@ def word_shape(word):
     else:
         name = "mixed"
     return SHAPES.index(name)
-
-
-def build_vocab(cfg: VocabConfig, splits):
-    if cfg.embedding not in EMBEDDINGS:
-        raise ValueError(f"unknown embedding: {cfg.embedding}, one of {EMBEDDINGS}")
-    return fasttext_vocab(splits, cfg.min_freq) if "fasttext" in cfg.embedding else NoVocab()
-
-
-def saved_vocab(cfg: VocabConfig, words):
-    """The vocabulary of a checkpoint: its fastText words (their rows come with the weights), or none for Flair."""
-    return FastTextVocab(words) if "fasttext" in cfg.embedding else NoVocab()

@@ -38,7 +38,6 @@ CAPS_SENTENCE_SHARE, CAPS_WORD_SHARE = 0.005, 0.05   # posts with a sentence / o
                                                      # to the profile rows `caps line`, `caps words / 1000`
 NAME_LINES_SHARE = 0.03                   # posts with names that get a list/heading of bare names: ~0.05 a post, as test
 RARE_MIN, RARE_SHARE = 50, 0.03           # a form seen 50+ times and labelled in < 3% of them is not a place
-N_FOLDS = 5
 RU_DOC_MOD = 10                           # keep full rows for every 10th ru document, enough for 20% of train
 SEPARATORS, SEPARATOR_P = ["\n\n", "\n", " "], [0.7, 0.2, 0.1]
 
@@ -77,7 +76,7 @@ TRAIN_POLICY = JOINS + [join_house_number, label_kyiv] + REST
 
 
 def crc(value):
-    """A hash stable across runs, unlike hash(): splits and folds by it."""
+    """A hash stable across runs, unlike hash(): the splits go by it."""
     return zlib.crc32(str(value).encode())
 
 
@@ -200,8 +199,7 @@ def load_sentences(lang, chunksize=500_000):
         #  a larger share of Kyiv and street sentences makes val test-like without repeats
         in_val = has_held | (key % 100 < np.where(df.kyiv | df.street, VAL_PCT_RARE, VAL_PCT))
     df["split"] = np.where(in_val, "val", "train")
-    df["fold"] = key // 100 % N_FOLDS
-    assert not df.norm.duplicated().any()   # one copy per sentence: no leak between splits or folds
+    assert not df.norm.duplicated().any()   # one copy per sentence: no leak between the splits
     STATS["sentences kept"] = len(df)
     return df
 
@@ -342,7 +340,7 @@ def name_block(rng, names, weights, negatives):
     return block, spans
 
 
-def add_name_lines(texts, spans, share, seed):
+def add_name_lines(texts, spans, share, rng):
     """Add a block of bare names to `share` of the posts that have names. Names (nominative-looking, drawn by how
     often they are labelled) and negatives (capitalised first words outside labels: `Сьогодні`) come from these
     posts, so val gets no train names."""
@@ -352,7 +350,6 @@ def add_name_lines(texts, spans, share, seed):
     weights = [counts[n] for n in names]
     negatives = sorted({m.group() for text, pairs in zip(texts, spans) if (m := FIRST_WORD.match(text))
                         and not any(a < m.end() for a, _ in pairs)} - set(names))
-    rng = random.Random(seed)
     out_texts, out_spans = [], []
     for text, pairs in zip(texts, spans):
         pairs = [(int(a), int(b)) for a, b in pairs]
@@ -363,10 +360,9 @@ def add_name_lines(texts, spans, share, seed):
     return out_texts, out_spans
 
 
-def add_short_lines(texts, spans, pool, share, seed):
+def add_short_lines(texts, spans, pool, share, rng):
     """A Telegram sentence of 1-3 words with its labels (`Далі буде…`, `Феодосія.`) before or after `share` of the
     posts; `pool` holds (text, spans) of this split only."""
-    rng = random.Random(seed)
     out_texts, out_spans = [], []
     for text, pairs in zip(texts, spans):
         if pool and rng.random() < share:
@@ -376,9 +372,8 @@ def add_short_lines(texts, spans, pool, share, seed):
     return out_texts, out_spans
 
 
-def add_blank_footer(texts, share, seed):
+def add_blank_footer(texts, share, rng):
     """`text\\n\\n      `: what blank_footers leaves of the channel signature under a test post. Labels do not move."""
-    rng = random.Random(seed)
     return [text + "\n\n" + " " * rng.randint(15, 55) if rng.random() < share else text for text in texts]
 
 
@@ -386,11 +381,10 @@ LINE = re.compile(r"[^\n]+")
 PLAIN_WORD = re.compile(r"[^\W\d_]{4,}")
 
 
-def add_caps(texts, spans, name_share, sentence_share, word_share, seed):
+def add_caps(texts, spans, name_share, sentence_share, word_share, rng):
     """Capitals as Telegram writes them, labels untouched: a name (`КРЕЩАТИК`, share per name), a sentence
     (`ЦЕ ПІДПАЛ - КУПУЄМ ТРАЛ!`, per post), one plain word outside the names (`це ДУЖЕ важливо`, per post), so that
     capitals alone do not make a name."""
-    rng = random.Random(seed)
     out = []
     for text, pairs in zip(texts, spans):
         cuts = [span for span in pairs if rng.random() < name_share]
@@ -481,26 +475,23 @@ def build(rebuild=False, ru_share=RU_SHARE, tg_share=TG_SHARE, seed=0):
         sentences[lang] = sent
 
     rng = np.random.default_rng(seed)
+    aug = random.Random(seed)   # one stream for every augmentation: no two of them draw the same numbers
     result = {}
     for split, ru in (("train", ru_share), ("val", VAL_RU_SHARE)):   # stage 2: posts
         parts = {}
         for lang, sent in sentences.items():
             sent = sent[sent.split.eq(split)]
-            folds = []
-            # per fold, so one post never mixes sentences of two folds
-            for fold, group in sent.groupby("fold") if split == "train" else [(-1, sent)]:
-                if split == "train" and lang == "uk":
-                    group = upsample(group, rng)
-                folds.append(build_posts(group, rng, by_doc=lang == "ru").assign(lang=lang, fold=fold))
-            posts = pd.concat(folds, ignore_index=True)
+            if split == "train" and lang == "uk":
+                sent = upsample(sent, rng)
+            posts = build_posts(sent, rng, by_doc=lang == "ru").assign(lang=lang)
             # Test has lists and headings of bare names (`Чорнобиль - 19`); names come from this split only.
-            texts, spans = add_name_lines(posts.text.tolist(), posts.spans.tolist(), NAME_LINES_SHARE, seed)
+            texts, spans = add_name_lines(posts.text.tolist(), posts.spans.tolist(), NAME_LINES_SHARE, aug)
             if lang != "ru" and "tg" in sentences:   # a Ukrainian line in a Russian post would be made up
                 tg = sentences["tg"]
                 short = tg[tg.split.eq(split) & tg.words.between(1, 3)]
-                texts, spans = add_short_lines(texts, spans, list(zip(short.text, short.spans)), SHORT_LINE_SHARE, seed + 1)
-            texts = add_caps(texts, spans, CAPS_NAME_SHARE, CAPS_SENTENCE_SHARE, CAPS_WORD_SHARE, seed)
-            texts = add_blank_footer(texts, FOOTER_SHARE, seed + 2)
+                texts, spans = add_short_lines(texts, spans, list(zip(short.text, short.spans)), SHORT_LINE_SHARE, aug)
+            texts = add_caps(texts, spans, CAPS_NAME_SHARE, CAPS_SENTENCE_SHARE, CAPS_WORD_SHARE, aug)
+            texts = add_blank_footer(texts, FOOTER_SHARE, aug)
             parts[lang] = posts.assign(text=texts, spans=spans)
             _report(f"{split} {lang}: removal of data without names")
         shares = {lang: share for lang, share in (("ru", ru), ("tg", tg_share)) if lang in parts}
@@ -512,7 +503,7 @@ def build(rebuild=False, ru_share=RU_SHARE, tg_share=TG_SHARE, seed=0):
         posts = pd.concat(parts.values()).sample(frac=1, random_state=seed).reset_index(drop=True)
         assert all(aligned(tokenize(t), s) for t, s in zip(posts.text, posts.spans))
         result[split] = posts
-        posts.drop(columns=[] if split == "train" else ["fold"]).to_parquet(NORMALIZED_DIR / f"{split}.parquet")
+        posts.to_parquet(NORMALIZED_DIR / f"{split}.parquet")
 
     table = pd.DataFrame({"test": TEST_PROFILE, **{name: profile(posts) for name, posts in result.items()}})
     print("\nProfile, % of posts\n" + table.round(1).to_string())

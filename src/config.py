@@ -1,5 +1,5 @@
 """Hyperparameters of a run, grouped by the component that reads them."""
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 
 
 @dataclass
@@ -29,8 +29,9 @@ class ModelConfig:      # Tagger, RNNEncoder
 
 @dataclass
 class OptimConfig:      # TaggerModule.configure_optimizers, Trainer
-    optimizer: str = "adamw"        # adamw 
-    scheduler: str = "onecycle"         # none | plateau | cosine | onecycle
+    optimizer: str = "adamw"        # adamw | adam | radam | sgd
+    scheduler: str = "plateau"      # none | plateau | cosine | onecycle; plateau halves the LR after an epoch
+                                    # without val gain, and goes with early stopping (onecycle plans all epochs)
     lr: float = 1e-3
     weight_decay: float = 1e-2
     grad_clip: float = 1.0
@@ -43,10 +44,16 @@ class Config:
     model: ModelConfig = field(default_factory=ModelConfig)
     optim: OptimConfig = field(default_factory=OptimConfig)
     epochs: int = 10
-    patience: int = 0               # 0: no early stopping
+    patience: int = 2               # epochs without val gain before stopping; 0: no early stopping
     monitor: str = "val/f1"
     seed: int = 42
     accelerator: str = "auto"
     wandb_mode: str = "online"
     name: str = ""
 
+
+def config_from_dict(values, cls=Config):
+    """Config of a checkpoint (asdict): fields it lacks take their defaults, fields since removed are dropped."""
+    known = {f.name: f for f in fields(cls)}
+    return cls(**{k: config_from_dict(v, known[k].type) if is_dataclass(known[k].type) else v
+                  for k, v in values.items() if k in known})

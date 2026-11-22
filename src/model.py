@@ -72,7 +72,8 @@ class StackedEmbedder(nn.Module):
 
 
 class CharCNN(nn.Module):
-    """Letters of a word -> CHAR_DIM numbers: endings (`-івка`, `-щина`), capitals, apostrophes, unknown words."""
+    """Letters of a word -> CHAR_DIM numbers: endings (`-івка`, `-щина`), capitals, apostrophes, unknown words.
+    The max runs over the word's own letters only, so a word gets the same numbers whatever else is in the batch."""
 
     def __init__(self):
         super().__init__()
@@ -83,8 +84,12 @@ class CharCNN(nn.Module):
     def forward(self, batch):
         chars = batch["chars"]                                                  # [batch, steps, letters]
         b, t, n = chars.shape
-        x = self.embedding(chars.view(b * t, n)).transpose(1, 2)                # [words, dim, letters]
-        return self.conv(x).max(2).values.view(b, t, CHAR_DIM)
+        chars = chars.view(b * t, n)
+        x = self.conv(self.embedding(chars).transpose(1, 2))                    # [words, dim, letters]
+        pad = (chars == PAD).unsqueeze(1)
+        out = x.masked_fill(pad, float("-inf")).max(2).values
+        out = out.masked_fill(pad.all(2), 0.0)    # padding steps of a post: 0, not -inf (word dropout makes -inf * 0)
+        return out.view(b, t, CHAR_DIM)
 
 
 class CasingEmbedder(nn.Module):

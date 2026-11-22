@@ -3,6 +3,7 @@
 /docs/*
 !/docs/.gitkeep
 !/docs/architectures.md
+!/docs/historic/
 .venv/
 .ipynb_checkpoints/
 __pycache__/

@@ -5,7 +5,7 @@ data/tg_geo_dataset.csv in the shape of uk_geo_dataset.csv, so build_dataset rel
 
 Every sentence with a LOC is kept and at most as many without one: those give the Telegram posts without names and
 the lines of 1-3 words (`Далі буде…`) that build_dataset adds to posts. Labels differ from test in the type words
-(`селі X` has LOC `X`), `столиці` (O) and cities in posts (`мер Києва` is LOC); fix_spans relabels all three.
+(`селі X` has LOC `X`) and cities in posts (`мер Києва` is LOC); fix_spans relabels both.
 """
 import argparse
 import urllib.request

@@ -1,10 +1,15 @@
-"""Build data/normalized/: clean and relabel uk/ru sentences, then glue them into posts shaped like test.
+"""Build data/normalized/: clean and relabel the uk, ru and tg sentences (stage 1), then glue them into posts shaped
+like test (stage 2).
 
-    python -m scripts.build_dataset    # cleaning and labels are cached; --rebuild redoes them
+    python -m scripts.build_dataset    # stage 1 is cached per source; --rebuild redoes it
+
+The stage-1 cache is rebuilt by itself when the labelling code in src (label_policy, tokenizer, tags) or a source CSV
+changes; after an edit to stage 1 in this file, pass --rebuild.
 
 Run from the project root.
 """
 import argparse
+import hashlib
 import random
 import re
 import unicodedata
@@ -14,8 +19,9 @@ from collections import Counter
 import numpy as np
 import pandas as pd
 
+from src.colab import load_env
 from src.label_policy import JOINS, LOWERABLE, REGION_ADJ, REST, STREET, can_be, clean_spans, join_house_number, relabel
-from src.project import DATA_DIR, NORMALIZED_DIR, WANDB_ENTITY, WANDB_PROJECT
+from src.project import DATA_DIR, NORMALIZED_DIR, ROOT, WANDB_ENTITY, WANDB_PROJECT
 from src.tags import aligned, parse_spans
 from src.tokenizer import prepare, tokenize
 
@@ -36,24 +42,25 @@ N_FOLDS = 5
 RU_DOC_MOD = 10                           # keep full rows for every 10th ru document, enough for 20% of train
 SEPARATORS, SEPARATOR_P = ["\n\n", "\n", " "], [0.7, 0.2, 0.1]
 
-# Target shares of test posts, from notebooks/EDA.ipynb as run on 2026-11-20 (test labelled by regex_labeller):
-# names per post from 6.6, posts and empty posts per length bin from 6.8, kyiv and street from 6.7; district is
-# features() over the same labels.
+# Shares of test posts, from notebooks/EDA.ipynb as run on 2026-11-20 (test labelled by regex_labeller): names per
+# post from 6.6, posts and empty posts per length bin from 6.8, kyiv and street from 6.7; district is features() over
+# the same labels. Stage 2 fits only the length bins and the empty posts per bin (TARGET_WORDS, TARGET_EMPTY); the
+# other rows of TEST_PROFILE are there to compare train and val with.
 BIN_NAMES = ["0-15", "16-30", "31-60", "61-120", "121+"]
 BIN_LOW, BIN_HIGH = np.array([1, 16, 31, 61, 121]), np.array([15, 30, 60, 120, 250])
 TARGET_WORDS = np.array([0.220, 0.239, 0.245, 0.201, 0.094])
 TARGET_EMPTY = np.array([0.6476, 0.3684, 0.3504, 0.1458, 0.0667])
-TARGET_PROFILE = {"names 0": 35.2, "names 1": 31.4, "names 2": 17.2, "names 3-4": 10.9, "names 5+": 5.2,
+TEST_PROFILE = {"names 0": 35.2, "names 1": 31.4, "names 2": 17.2, "names 3-4": 10.9, "names 5+": 5.2,
                   **{f"words {n}": 100 * p for n, p in zip(BIN_NAMES, TARGET_WORDS)},
                   "kyiv": 41.1, "street": 10.7, "district": 14.5, "multiline": 85.0, "median words": 36,
-                  #  what test has, not a target: FOOTER_SHARE and SHORT_LINE_SHARE are kept low on purpose
+                  #  not fitted: FOOTER_SHARE and SHORT_LINE_SHARE are kept low on purpose
                   "ends with newline": 36.9, "short line": 23.9,
                   "caps line": 1.7, "caps words / 1000": 6.0, "ru": 8.0}
 
 STATS = Counter()
 
 
-# --- train labels: source sentences labelled as test labels them --------------------------------------------------
+# --- stage 1: source sentences labelled as test labels them, deduplicated, split --------------------------------------
 DISTRICT = r"район|област|\bобл\.|\bр-н\b|щин[аіиу]$"   # `Дарницькому районі`, `Київщина`
 TCH = re.compile(r"\s[-–—]\s[^-–—]{1,40}\s[-–—]\s*TCH\.?\s*$")
 KYIV = re.compile(r"\b(?:Київ|Києва|Києві|Києву|Києвом|Киев|Киева|Киеве|Киеву|Киевом)\b", re.I)
@@ -112,21 +119,9 @@ def fix_spans(text, loc, org=(), stats=None):
     return text, spans
 
 
-# --- profile ------------------------------------------------------------------------------------------------------
-WORD = re.compile(r"\w+(?:['-]\w+)*")
-FORM = re.compile(r"(?<![\w'’ʼ-])[А-ЯІЇЄҐA-Z][\w'’ʼ]+(?![\w'’ʼ-])")   # one capitalised word
-KYIV_MENTION = re.compile(r"київ|києв|киев", re.I)
-CAPS_WORD = re.compile(r"(?<!\w)[A-ZА-ЯІЇЄҐЁ]{4,}(?!\w)")
-
-
-def caps_line(text):
-    """Has the post a line of 8+ letters with no lowercase one?"""
-    return any(sum(c.isalpha() for c in line) >= 8 and line == line.upper() for line in text.split("\n"))
-
-
-def short_line(text):
-    """Has the post a line of 1-3 words (`Слава ЗСУ!`, `Київ:`)?"""
-    return any(0 < len(WORD.findall(line)) <= 3 for line in text.split("\n"))
+def normalised_loc_signature(text, spans):
+    return tuple(sorted((normalize_text(text[:a]), normalize_text(text[a:b]), normalize_text(text[b:]))
+                        for a, b in spans if normalize_text(text[a:b])))
 
 
 def stem(name):
@@ -134,9 +129,9 @@ def stem(name):
     return " ".join(w[:-2] or w for w in name.lower().split())
 
 
-def normalised_loc_signature(text, spans):
-    return tuple(sorted((normalize_text(text[:a]), normalize_text(text[a:b]), normalize_text(text[b:]))
-                        for a, b in spans if normalize_text(text[a:b])))
+WORD = re.compile(r"\w+(?:['-]\w+)*")
+FORM = re.compile(r"(?<![\w'’ʼ-])[А-ЯІЇЄҐA-Z][\w'’ʼ]+(?![\w'’ʼ-])")   # one capitalised word
+KYIV_MENTION = re.compile(r"київ|києв|киев", re.I)
 
 
 def features(text, spans):
@@ -147,7 +142,6 @@ def features(text, spans):
             "district": any(re.search(DISTRICT, s, re.I) for s in labels)}
 
 
-# --- sentence tables ---------------------------------------------------------------------
 def load_sentences(lang, chunksize=500_000):
     """Clean every row. Copies and label conflicts are judged on the whole corpus, not on the kept part."""
     extra = ["doc_id", "sent_id"] if lang == "ru" else []
@@ -212,7 +206,7 @@ def load_sentences(lang, chunksize=500_000):
     return df
 
 
-# --- posts ------------------------------------------------------------------------------
+# --- stage 2: sentences glued into posts shaped like test -------------------------------------------------------------
 STREET_START = re.compile(rf"{STREET}\s", re.I)
 
 
@@ -306,7 +300,7 @@ def build_posts(sent, rng, by_doc=False):
     return posts[["text", "spans"]]
 
 
-# --- augmentation -----------------------------------------------------------------------
+# --- augmentation -----------------------------------------------------------------------------------------------------
 def _attach(text, pairs, block, block_spans, rng):
     """Put a block before or after the post, a blank line between them."""
     if rng.random() < 0.5:
@@ -419,6 +413,20 @@ def _upper(text, span):
     return text[:a] + upper + text[b:] if len(upper) == b - a else text   # `ß` -> `SS` would shift the labels
 
 
+# --- profile: train and val against test ------------------------------------------------------------------------------
+CAPS_WORD = re.compile(r"(?<!\w)[A-ZА-ЯІЇЄҐЁ]{4,}(?!\w)")
+
+
+def caps_line(text):
+    """Has the post a line of 8+ letters with no lowercase one?"""
+    return any(sum(c.isalpha() for c in line) >= 8 and line == line.upper() for line in text.split("\n"))
+
+
+def short_line(text):
+    """Has the post a line of 1-3 words (`Слава ЗСУ!`, `Київ:`)?"""
+    return any(0 < len(WORD.findall(line)) <= 3 for line in text.split("\n"))
+
+
 def profile(posts):
     f = pd.DataFrame([features(t, s) for t, s in zip(posts.text, posts.spans)])
     names = pd.cut(f.labels, [-1, 0, 1, 2, 4, np.inf], labels=["0", "1", "2", "3-4", "5+"])
@@ -434,7 +442,7 @@ def profile(posts):
             "ru": 100 * posts.lang.eq("ru").mean(), "tg": 100 * posts.lang.eq("tg").mean(), "posts": len(posts)}
 
 
-# --- build ------------------------------------------------------------------------------
+# --- build ------------------------------------------------------------------------------------------------------------
 def _report(title):
     print(f"\n{title}")
     for key, value in STATS.items():
@@ -442,16 +450,31 @@ def _report(title):
     STATS.clear()
 
 
+def stage1_key(csv):
+    """What a cached sentence table depends on outside this file: the labelling code in src and the source CSV."""
+    digest = hashlib.sha1()
+    for name in ("label_policy.py", "tokenizer.py", "tags.py"):
+        digest.update((ROOT / "src" / name).read_bytes())
+    digest.update(str(csv.stat().st_size).encode())
+    return digest.hexdigest()
+
+
 def build(rebuild=False, ru_share=RU_SHARE, tg_share=TG_SHARE, seed=0):
     NORMALIZED_DIR.mkdir(exist_ok=True)
     sentences = {}
     for lang in ("uk", "ru", "tg"):   # stage 1: cleaning and labels, cached because ru takes minutes
-        path = NORMALIZED_DIR / f"{lang}_sentences.parquet"
-        if lang == "tg" and not (DATA_DIR / "tg_geo_dataset.csv").exists() and not path.exists():
+        path, csv = NORMALIZED_DIR / f"{lang}_sentences.parquet", DATA_DIR / f"{lang}_geo_dataset.csv"
+        if lang == "tg" and not csv.exists() and not path.exists():
             print("no data/tg_geo_dataset.csv (python -m scripts.fetch_ubertext): posts without Telegram sentences")
             continue
-        if rebuild or not path.exists():
+        key_path = path.with_suffix(".key")
+        key = stage1_key(csv) if csv.exists() else None   # no CSV: the cache is all there is
+        stale = key is not None and path.exists() and (not key_path.exists() or key_path.read_text() != key)
+        if stale and not rebuild:
+            print(f"{lang}: src labelling code or {csv.name} changed since the cache was built, rebuilding")
+        if rebuild or stale or not path.exists():
             load_sentences(lang).to_parquet(path)
+            key_path.write_text(key)
             _report(f"{lang}: cleaning")
         sent = pd.read_parquet(path)
         sent["spans"] = [[(int(a), int(b)) for a, b in spans] for spans in sent.spans]
@@ -491,7 +514,7 @@ def build(rebuild=False, ru_share=RU_SHARE, tg_share=TG_SHARE, seed=0):
         result[split] = posts
         posts.drop(columns=[] if split == "train" else ["fold"]).to_parquet(NORMALIZED_DIR / f"{split}.parquet")
 
-    table = pd.DataFrame({"test": TARGET_PROFILE, **{name: profile(posts) for name, posts in result.items()}})
+    table = pd.DataFrame({"test": TEST_PROFILE, **{name: profile(posts) for name, posts in result.items()}})
     print("\nProfile, % of posts\n" + table.round(1).to_string())
     names = {split: Counter(t[a:b] for t, spans in zip(posts.text, posts.spans) for a, b in spans)
              for split, posts in result.items()}
@@ -503,6 +526,8 @@ def build(rebuild=False, ru_share=RU_SHARE, tg_share=TG_SHARE, seed=0):
 def upload():
     """Log train/val parquet as W&B artifact `normalized`; colab.setup() downloads the latest one."""
     import wandb
+
+    load_env()   # WANDB_API_KEY from .env, as in Colab
 
     with wandb.init(entity=WANDB_ENTITY, project=WANDB_PROJECT, job_type="dataset") as run:
         artifact = wandb.Artifact("normalized", type="dataset")

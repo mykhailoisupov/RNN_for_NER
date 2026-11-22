@@ -7,15 +7,16 @@ Run from the project root.
 import argparse
 import random
 import re
+import unicodedata
+import zlib
 from collections import Counter
 
 import numpy as np
 import pandas as pd
 
-from src.corpus import DISTRICT, STREET, crc, fix_spans, normalize_text, parse_spans
-from src.label_policy import REGION_ADJ
+from src.label_policy import JOINS, LOWERABLE, REGION_ADJ, REST, STREET, can_be, clean_spans, join_house_number, relabel
 from src.project import DATA_DIR, NORMALIZED_DIR, WANDB_ENTITY, WANDB_PROJECT
-from src.tags import aligned
+from src.tags import aligned, parse_spans
 from src.tokenizer import prepare, tokenize
 
 RU_SHARE, VAL_RU_SHARE = 0.20, 0.08
@@ -51,6 +52,67 @@ TARGET_PROFILE = {"names 0": 35.2, "names 1": 31.4, "names 2": 17.2, "names 3-4"
 
 STATS = Counter()
 
+
+# --- train labels: source sentences labelled as test labels them --------------------------------------------------
+DISTRICT = r"район|област|\bобл\.|\bр-н\b|щин[аіиу]$"   # `Дарницькому районі`, `Київщина`
+TCH = re.compile(r"\s[-–—]\s[^-–—]{1,40}\s[-–—]\s*TCH\.?\s*$")
+KYIV = re.compile(r"\b(?:Київ|Києва|Києві|Києву|Києвом|Киев|Киева|Киеве|Киеву|Киевом)\b", re.I)
+
+
+def label_kyiv(text, spans):
+    """Test labels Kyiv outside organisation names; the sources often leave it out. Train only: fix_spans needs
+    the ORG spans of the source to undo it inside `«Вечірній Київ»`."""
+    return spans + [m.span() for m in KYIV.finditer(text) if not any(c < m.end() and m.start() < d for c, d in spans)]
+
+
+#  join_house_number: train only, as test writes addresses (`вул. Хрещатик, 28`); it moved no LB answer at submit
+TRAIN_POLICY = JOINS + [join_house_number, label_kyiv] + REST
+
+
+def crc(value):
+    """A hash stable across runs, unlike hash(): splits and folds by it."""
+    return zlib.crc32(str(value).encode())
+
+
+def normalize_text(text):
+    """Deduplication key only; NFKC changes length, so it never reaches the model."""
+    return re.sub(r"\W+", " ", unicodedata.normalize("NFKC", text).lower()).strip()
+
+
+def fix_spans(text, loc, org=(), stats=None):
+    """Prepared sentence + raw LOC/ORG spans -> (text, spans) labelled like test, or None to drop the row.
+    `stats` counts what every step changed."""
+    stats = Counter() if stats is None else stats
+    assert all(0 <= a < b <= len(text) for a, b in [*loc, *org])
+    cut = TCH.search(text) if "TCH" in text else None   # `... - Київ - TCH.` is a site tag, not text
+    if cut:
+        text = text[:cut.start()]
+        loc, org = ([s for s in spans if s[1] <= len(text)] for spans in (loc, org))
+        stats["TCH footer cut"] += 1
+    if not text.strip():
+        stats["rows dropped: empty text"] += 1
+        return None
+    spans = clean_spans(text, loc)
+    stats["rows changed by clean_spans"] += spans != list(loc)
+    relabelled = relabel(text, spans, TRAIN_POLICY, stats)
+    #  A label inside an ORG span is dropped (`Динамо Київ`); a Kyiv mention label_kyiv adds, if it touches one at all:
+    #  ORG offsets are shifted now and then (`Укрістгаз (Ки`).
+    added = [s for s in relabelled if s not in spans and KYIV.fullmatch(text, *s)]
+    spans = [(a, b) for a, b in relabelled
+             if not any(c <= a and b <= d or (a, b) in added and c < b and a < d for c, d in org)]
+    stats["LOC inside ORG removed"] += len(relabelled) - len(spans)
+    if crc(text) % 5 == 0:      # `москви`, `рф`: test writes them in lowercase, train never does; 20% of sentences
+        for a, b in spans:
+            if LOWERABLE.fullmatch(text, a, b):
+                text = text[:a] + text[a:b].lower() + text[b:]
+                stats["LOC lowercased"] += 1
+    if spans and not aligned(tokenize(text), spans):   # shifted offsets or glued words, not fixable
+        stats["rows dropped: span cuts a word"] += 1
+        return None
+    return text, spans
+
+
+# --- profile ------------------------------------------------------------------------------------------------------
 WORD = re.compile(r"\w+(?:['-]\w+)*")
 FORM = re.compile(r"(?<![\w'’ʼ-])[А-ЯІЇЄҐA-Z][\w'’ʼ]+(?![\w'’ʼ-])")   # one capitalised word
 KYIV_MENTION = re.compile(r"київ|києв|киев", re.I)
@@ -259,9 +321,11 @@ def _attach(text, pairs, block, block_spans, rng):
 SLOGANS = ["Героям слава!", "Слава ЗСУ!", "Слава нації!"]
 NAME = re.compile(r"[А-ЯІЇЄҐA-Z][^\d\n]*")
 FIRST_WORD = re.compile(r"[А-ЯІЇЄҐ][а-яіїєґ']{2,}")
-#  An oblique-case ending: test lists names in the nominative (`Фастів - 12`), so `Фастові`, `Києва` stay out.
-#  ponytail: genitive `Одеси` passes (same ending as plural `Черкаси`); pymorphy3 if list recall does not grow.
-OBLIQUE = re.compile(r"(?:і|ї|у|ю|ом|ем|єм|ою|ею|ах|ях|ова|ева|єва|ого|ої|ій|ому|ім|ни|ви|пи)$")   # `України`, `Росії`
+
+
+def nominative(name):
+    """Test lists names in the nominative (`Фастів - 12`): `Фастові`, `Києва`, `Одеси` stay out, `Черкаси` stays in."""
+    return all(can_be(word, "nomn") for word in name.split())
 
 
 def name_block(rng, names, weights, negatives):
@@ -289,7 +353,7 @@ def add_name_lines(texts, spans, share, seed):
     often they are labelled) and negatives (capitalised first words outside labels: `Сьогодні`) come from these
     posts, so val gets no train names."""
     counts = Counter(text[a:b] for text, pairs in zip(texts, spans) for a, b in pairs
-                     if NAME.fullmatch(text, a, b) and len(text[a:b].split()) <= 3 and not OBLIQUE.search(text[a:b]))
+                     if NAME.fullmatch(text, a, b) and len(text[a:b].split()) <= 3 and nominative(text[a:b]))
     names = sorted(n for n, k in counts.items() if k >= 2)
     weights = [counts[n] for n in names]
     negatives = sorted({m.group() for text, pairs in zip(texts, spans) if (m := FIRST_WORD.match(text))

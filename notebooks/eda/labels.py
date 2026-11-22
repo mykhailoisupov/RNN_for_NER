@@ -5,11 +5,13 @@ from collections import Counter
 import numpy as np
 import pandas as pd
 
-from src.corpus import DISTRICT, STREET, fix_spans
-from src.label_policy import KYIV, NAME_WORD
+from scripts.build_dataset import DISTRICT, KYIV, fix_spans
+from src.label_policy import STREET
 from src.tokenizer import prepare
 
 from .test_vs_sources import comparison_text, words
+
+NAME_WORD = r"[А-ЯІЇЄҐA-Z][\w'’ʼ]*(?:-[А-ЯІЇЄҐA-Z]?[\w'’ʼ]+)*"   # one capitalised word
 
 PROBES = {   # names whose mentions context_probes counts: labelled, inside an ORG only, not labelled
     "Ukraine": re.compile(r"\b(?:Україн(?:а|и|і|у|ою)|Украин(?:а|ы|е|у|ой))\b", re.I),

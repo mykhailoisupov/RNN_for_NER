@@ -1,6 +1,14 @@
-"""Word tags O, B, I and the character spans they stand for."""
+"""Word tags O, B, I and the character spans they stand for; also the `(a, b)` spans of a labelled CSV."""
+import re
+
 TAGS = ["O", "B", "I"]       # one entity type: a location
 O, B, I = range(len(TAGS))
+SPAN = re.compile(r"\((\d+),\s*(\d+)\)")
+
+
+def parse_spans(value):
+    """`[(3, 8), (12, 17)]` as a CSV cell keeps it -> [(3, 8), (12, 17)]."""
+    return [(int(a), int(b)) for a, b in SPAN.findall(str(value))]
 
 
 def spans_to_tags(tokens, spans):

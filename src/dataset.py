@@ -10,9 +10,8 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset, Sampler
 
 from src.config import Config
-from src.corpus import parse_spans
 from src.project import DATA_DIR, NORMALIZED_DIR
-from src.tags import I, O, spans_to_tags
+from src.tags import I, O, parse_spans, spans_to_tags
 from src.tokenizer import tokenize
 from src.vocab import PAD, UNK, build_vocab, encode_chars, word_shape
 

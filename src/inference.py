@@ -42,7 +42,7 @@ def _word_probs(model, examples, batch_size, on):
     for batch in DataLoader(NERDataset(examples), batch_sampler=sampler, collate_fn=collate):
         batch = {k: v.to(model.device) if torch.is_tensor(v) else v for k, v in batch.items()}
         for row, i in zip(model.probs(batch).cpu().numpy(), batch["idx"].tolist()):
-            probs[i] = row[examples[i].word_starts]
+            probs[i] = row[:len(examples[i].tokens)]
     return probs
 
 
@@ -62,13 +62,12 @@ def predict_probs(model, examples, batch_size, window=WINDOW, overlap=OVERLAP, o
             pieces.append(ex)
             owners.append((i, 0))
             continue
-        assert ex.word_starts == list(range(len(ex.tokens))), "windows need one model token per word"
         for a, b in windows(len(ex.tokens), window, overlap):
-            pieces.append(Example(ex.text, ex.tokens[a:b], [], ex.ids[a:b], ex.labels[a:b], list(range(b - a)),
-                                  ex.chars[a:b], ex.shapes[a:b]))
+            pieces.append(Example(ex.text, ex.tokens[a:b], [], ex.ids[a:b], ex.labels[a:b], ex.chars[a:b],
+                                  ex.shapes[a:b]))
             owners.append((i, a))
-    sums = [np.zeros((len(ex.word_starts), len(TAGS))) for ex in examples]
-    counts = [np.zeros(len(ex.word_starts)) for ex in examples]
+    sums = [np.zeros((len(ex.tokens), len(TAGS))) for ex in examples]
+    counts = [np.zeros(len(ex.tokens)) for ex in examples]
     for probs, (i, a) in zip(_word_probs(model, pieces, batch_size, on), owners):
         sums[i][a:a + len(probs)] += probs
         counts[i][a:a + len(probs)] += 1

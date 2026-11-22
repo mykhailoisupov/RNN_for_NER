@@ -4,8 +4,7 @@ from dataclasses import dataclass, field
 
 @dataclass
 class VocabConfig:      # src.vocab, model.build_embedder
-    embedding: str = "fasttext+flair"   # fasttext | bpemb | flair | fasttext+flair
-    bpe_vocab_size: int = 50000
+    embedding: str = "fasttext+flair"   # fasttext | flair | fasttext+flair
     min_freq: int = 2
     freeze_embeddings: bool = True
 

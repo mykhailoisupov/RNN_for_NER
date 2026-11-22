@@ -25,7 +25,7 @@ OPTIMIZERS = {
 
 
 def build_embedder(vectors, cfg: VocabConfig):
-    """fastText or BPEmb rows (when the vocabulary has vectors) and/or Flair, then characters and word shape."""
+    """fastText rows (when the vocabulary has vectors) and/or Flair, then characters and word shape."""
     parts = [LookupEmbedder(vectors, cfg.freeze_embeddings)] if vectors is not None else []
     if "flair" in cfg.embedding:
         parts.append(FlairEmbedder())

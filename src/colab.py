@@ -10,7 +10,7 @@ from pathlib import Path
 
 from src.project import DATA_DIR, KAGGLE_COMPETITION, NORMALIZED_DIR, ROOT, WANDB_ENTITY, WANDB_PROJECT
 
-PACKAGES = {"lightning": "lightning", "wandb": "wandb", "bpemb": "bpemb", "kaggle": "kaggle", "flair": "flair>=0.15",
+PACKAGES = {"lightning": "lightning", "wandb": "wandb", "kaggle": "kaggle", "flair": "flair>=0.15",
             "pymorphy3": "pymorphy3", "pymorphy3_dicts_uk": "pymorphy3-dicts-uk", "pymorphy3_dicts_ru": "pymorphy3-dicts-ru"}
 DATA_FILES = ["test.csv", "labeling_sample.csv"]
 NORMALIZED = ["train.parquet", "val.parquet"]

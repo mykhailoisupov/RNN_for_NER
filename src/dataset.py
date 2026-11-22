@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, Dataset, Sampler
 
 from src.config import Config
 from src.project import DATA_DIR, NORMALIZED_DIR
-from src.tags import I, O, parse_spans, spans_to_tags
+from src.tags import parse_spans, spans_to_tags
 from src.tokenizer import tokenize
 from src.vocab import PAD, UNK, build_vocab, encode_chars, word_shape
 
@@ -25,11 +25,10 @@ class Example:
     text: str
     tokens: list
     locations: list
-    ids: list
+    ids: list       # one per word
     labels: list
-    word_starts: list
-    chars: list     # char ids of the word of every id
-    shapes: list    # word_shape of the word of every id
+    chars: list     # char ids of every word
+    shapes: list    # word_shape of every word
 
 
 def _rows(texts, spans):
@@ -59,23 +58,16 @@ def load_eval():
 
 
 def build_examples(rows, vocab):
+    """One id, tag, char ids and shape per word; an empty post gets one UNK that the loss ignores."""
     cache, examples = {}, []
     for text, tokens, spans in rows:
-        tags = spans_to_tags(tokens, spans)
-        ids, labels, word_starts, chars, shapes = [], [], [], [], []
-        for token, tag in zip(tokens, tags):
+        for token in tokens:
             if token.text not in cache:
-                cache[token.text] = vocab.encode(token.text) or [UNK], encode_chars(token.text), word_shape(token.text)
-            pieces, word_chars, shape = cache[token.text]
-            word_starts.append(len(ids))
-            ids += pieces
-            labels += [tag] + [O if tag == O else I] * (len(pieces) - 1)
-            chars += [word_chars] * len(pieces)      # a BPEmb piece gets the features of its word
-            shapes += [shape] * len(pieces)
-        if not ids:
-            ids, labels, chars, shapes = [UNK], [IGNORE], [(PAD,)], [PAD]
+                cache[token.text] = vocab.encode(token.text), encode_chars(token.text), word_shape(token.text)
+        ids, chars, shapes = map(list, zip(*([cache[t.text] for t in tokens] or [(UNK, (PAD,), PAD)])))
+        labels = spans_to_tags(tokens, spans) or [IGNORE]
         locations = [text[a:b] for a, b in spans]
-        examples.append(Example(text, tokens, locations, ids, labels, word_starts, chars, shapes))
+        examples.append(Example(text, tokens, locations, ids, labels, chars, shapes))
     return examples
 
 

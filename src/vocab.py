@@ -1,5 +1,6 @@
-"""Word -> ids the model looks up: fastText rows, BPEmb pieces, or nothing (Flair reads the words themselves);
-also the characters and the shape of every word."""
+"""Word -> the id the model looks up: a fastText row, or nothing (Flair reads the words themselves); also the
+characters and the shape of every word. One id per word: BPE pieces were tried and dropped
+(docs/historic/bpe-tokenization.md)."""
 import gzip
 import urllib.request
 from collections import Counter
@@ -11,8 +12,8 @@ from src.project import EMBEDDINGS_DIR
 
 FASTTEXT_URL = "https://dl.fbaipublicfiles.com/fasttext/vectors-crawl/cc.uk.300.vec.gz"
 PAD, UNK = 0, 1
-EMBEDDING_DIM = 300   # cc.uk.300 and the BPEmb we load
-EMBEDDINGS = ("fasttext", "bpemb", "flair", "fasttext+flair")   # Flair stacks on fastText only: one id per word
+EMBEDDING_DIM = 300   # cc.uk.300
+EMBEDDINGS = ("fasttext", "flair", "fasttext+flair")
 
 # Characters after prepare(); any other is UNK. Fixed, so a checkpoint needs no character vocabulary.
 _LETTERS = "абвгґдеєжзиіїйклмнопрстуфхцчшщьюяёъыэ" + "abcdefghijklmnopqrstuvwxyz"
@@ -54,7 +55,7 @@ class FastTextVocab:
         self.vectors = np.zeros((len(words) + 2, EMBEDDING_DIM), dtype=np.float32) if vectors is None else vectors
 
     def encode(self, word):
-        return [self.words.get(word, UNK)]
+        return self.words.get(word, UNK)
 
 
 def fasttext_vocab(splits, min_freq):
@@ -83,22 +84,11 @@ def fasttext_vocab(splits, min_freq):
     return FastTextVocab(words, vectors)
 
 
-class BpeVocab:
-    def __init__(self, vocab_size):
-        from bpemb import BPEmb
-
-        self.bpemb = BPEmb(lang="uk", vs=vocab_size, dim=EMBEDDING_DIM, cache_dir=EMBEDDINGS_DIR)
-        self.vectors = np.vstack([np.zeros((1, EMBEDDING_DIM)), self.bpemb.vectors]).astype(np.float32)
-
-    def encode(self, word):
-        return [i + 1 for i in self.bpemb.encode_ids(word)]
-
-
 class NoVocab:
     vectors = None
 
     def encode(self, word):
-        return [UNK]
+        return UNK
 
 
 def encode_chars(word):
@@ -127,15 +117,9 @@ def word_shape(word):
 def build_vocab(cfg: VocabConfig, splits):
     if cfg.embedding not in EMBEDDINGS:
         raise ValueError(f"unknown embedding: {cfg.embedding}, one of {EMBEDDINGS}")
-    if "fasttext" in cfg.embedding:
-        return fasttext_vocab(splits, cfg.min_freq)
-    if cfg.embedding == "bpemb":
-        return BpeVocab(cfg.bpe_vocab_size)
-    return NoVocab()
+    return fasttext_vocab(splits, cfg.min_freq) if "fasttext" in cfg.embedding else NoVocab()
 
 
 def saved_vocab(cfg: VocabConfig, words):
-    """The vocabulary of a checkpoint: its fastText words, or rebuilt from the config."""
-    if "fasttext" in cfg.embedding:
-        return FastTextVocab(words)
-    return build_vocab(cfg, None)
+    """The vocabulary of a checkpoint: its fastText words (their rows come with the weights), or none for Flair."""
+    return FastTextVocab(words) if "fasttext" in cfg.embedding else NoVocab()

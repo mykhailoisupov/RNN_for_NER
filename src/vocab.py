@@ -84,7 +84,7 @@ def fasttext_vocab(splits, min_freq):
 
 class NoVocab:
     """Flair alone reads the words themselves: every id is UNK, kept only for lengths and masks."""
-    vectors = None
+    words = vectors = None
 
     def encode(self, word):
         return UNK

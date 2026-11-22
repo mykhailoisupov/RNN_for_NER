@@ -11,10 +11,8 @@ import argparse
 import numpy as np
 import torch
 
-from src.config import config_from_dict
 from src.dataset import SPLITS, build_examples, load_eval, loader
 from src.model import TaggerModule
-from src.vocab import saved_vocab
 
 
 def device():
@@ -23,16 +21,6 @@ def device():
     if torch.backends.mps.is_available():
         return torch.device("mps")
     return torch.device("cpu")
-
-
-def load_model(path):
-    """A checkpoint saved by src.train -> (model, vocab); the data is not needed."""
-    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
-    cfg = config_from_dict(checkpoint["config"])
-    vocab = saved_vocab(cfg.vocab, checkpoint["vocab"])
-    model = TaggerModule(cfg, vocab)
-    model.load_weights(checkpoint["state_dict"])
-    return model, vocab
 
 
 @torch.no_grad()
@@ -68,7 +56,7 @@ if __name__ == "__main__":
     parser.add_argument("checkpoint")
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
-    model, vocab = load_model(args.checkpoint)
+    model = TaggerModule.load(args.checkpoint)
     posts = load_eval()
-    save_probs(args.out, {split: predict_probs(model, build_examples(posts[split], vocab)) for split in SPLITS})
+    save_probs(args.out, {split: predict_probs(model, build_examples(posts[split], model.vocab)) for split in SPLITS})
     print("written", args.out)

@@ -11,7 +11,7 @@ from src.config import MODELS_DIR, WANDB_ENTITY, WANDB_PROJECT, Config
 from src.dataset import EVAL_SETS, SPLITS, NERDataModule
 from src.metric import counts_per_post, hard_processing, scores
 from src.model import TaggerModule
-from src.predict import load_model, predict_probs, save_probs
+from src.predict import predict_probs, save_probs
 from src.submission import gold_and_predicted, write_submissions
 from src.tags import TAGS
 
@@ -115,7 +115,7 @@ def run(cfg: Config):
     )
     trainer.fit(model, datamodule=data)
 
-    model, _ = load_model(checkpoint.best_model_path)
+    model = TaggerModule.load(checkpoint.best_model_path)
     word = {split: predict_probs(model, data.examples[split]) for split in SPLITS}
     probs = run_dir / "probs.npz"
     save_probs(probs, word)

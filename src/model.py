@@ -11,11 +11,11 @@ from torch import nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from torch.optim.lr_scheduler import CosineAnnealingLR, OneCycleLR, ReduceLROnPlateau
 
-from src.config import Config, ModelConfig, VocabConfig
+from src.config import Config, ModelConfig, VocabConfig, config_from_dict
 from src.crf import CRF
 from src.dataset import EVAL_SETS
 from src.tags import TAGS
-from src.vocab import CHARS, PAD, SHAPES
+from src.vocab import CHARS, PAD, SHAPES, saved_vocab
 
 
 RNNS = {"lstm": nn.LSTM, "gru": nn.GRU}
@@ -195,13 +195,13 @@ class Tagger(nn.Module):
 
 
 class TaggerModule(L.LightningModule):
-    """Training of the Tagger. A checkpoint also keeps the config and the fastText words, so src.predict.load_model
-    rebuilds the model without the data."""
+    """Training of the Tagger. A checkpoint also keeps the config and the fastText words, so load() rebuilds the
+    model without the data."""
 
     def __init__(self, cfg: Config, vocab):
         super().__init__()
         self.cfg = cfg
-        self.vocab_words = getattr(vocab, "words", None)
+        self.vocab = vocab
         self.model = Tagger(vocab.vectors, cfg)
 
     def forward(self, batch):
@@ -233,17 +233,23 @@ class TaggerModule(L.LightningModule):
     def on_save_checkpoint(self, checkpoint):
         """Config as a dict (new fields take their defaults on load), the fastText words, no Flair weights."""
         checkpoint["config"] = asdict(self.cfg)
-        checkpoint["vocab"] = self.vocab_words
+        checkpoint["vocab"] = self.vocab.words
         flair = self._flair_prefixes()
         checkpoint["state_dict"] = {k: v for k, v in checkpoint["state_dict"].items() if not k.startswith(flair)}
 
-    def load_weights(self, state_dict):
-        """Weights of a checkpoint; only Flair's may be missing, as on_save_checkpoint leaves them out."""
-        missing, unexpected = self.load_state_dict(state_dict, strict=False)
-        flair = self._flair_prefixes()
+    @classmethod
+    def load(cls, path):
+        """A checkpoint of on_save_checkpoint -> the model and its vocabulary; the data is not needed. Only Flair's
+        weights may be missing, as they are left out there."""
+        checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+        cfg = config_from_dict(checkpoint["config"])
+        module = cls(cfg, saved_vocab(cfg.vocab, checkpoint["vocab"]))
+        missing, unexpected = module.load_state_dict(checkpoint["state_dict"], strict=False)
+        flair = module._flair_prefixes()
         wrong = [k for k in missing if not k.startswith(flair)] + list(unexpected)
         if wrong:
             raise RuntimeError(f"checkpoint does not match the model: {wrong[:10]}")
+        return module
 
     def configure_optimizers(self):
         params = [p for p in self.parameters() if p.requires_grad]

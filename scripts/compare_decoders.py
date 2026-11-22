@@ -1,12 +1,13 @@
 """Ablations of the answers path on saved ensemble probabilities: without rampart, without each span repair,
 without each test-policy step.
 
-    python -m scripts.compare_decoders models/ensemble-probs-w256o64/*.npz   # writes submission/compare_decoders.csv
+    python -m scripts.compare_decoders models/<run>/probs.npz ...   # writes submission/compare_decoders.csv
 
 Val decides, sample is a check; every row is compared with the submission path (rampart + all repairs) by a paired
 bootstrap on val (on sample when the .npz predate the current val). `test_changed` is the number of test posts a
-step changes: 0 means the step is dead weight for these models. argmax, BIO repair rules and rampart's threshold grid
-lost to this path in 661b9dc.
+step changes: 0 means the step is dead weight for these models. The .npz must match the current tokenizer and test.
+Earlier results (O threshold, argmax, BIO repair rules, rampart's threshold grid, the policy ablation on LB):
+docs/historic/postprocessing.md.
 """
 import argparse
 

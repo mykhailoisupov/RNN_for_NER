@@ -12,7 +12,7 @@ from src.dataset import EVAL_SETS, SPLITS, NERDataModule
 from src.metric import counts_per_post, hard_processing, scores
 from src.model import TaggerModule
 from src.predict import load_model, predict_probs, save_probs
-from src.submission import answers, write_submissions
+from src.submission import gold_and_predicted, write_submissions
 from src.tags import TAGS
 
 NAME_SKIP = {"embedding", "rnn", "bidirectional", "name", "wandb_mode", "accelerator"}
@@ -37,17 +37,13 @@ def run_name(cfg: Config):
     return "-".join([base, *changes])
 
 
-def strings(examples, predictions):
-    """Gold and predicted names of (index, word probabilities) pairs; the submission path without the test policy."""
-    return ([examples[i].locations for i, _ in predictions],
-            [answers(examples[i], probs, policy=[]) for i, probs in predictions])
-
-
 def oracle_f1(examples):
     """F1 of the gold tags through the answers path: what tags lose by themselves."""
-    return {f"{name}/oracle_f1": scores(counts_per_post(*strings(
-                examples[name], [(i, np.eye(len(TAGS))[ex.labels[:len(ex.words)]]) for i, ex in enumerate(examples[name])])))["f1"]
-            for name in EVAL_SETS}
+    out = {}
+    for name in EVAL_SETS:
+        gold = [np.eye(len(TAGS))[ex.labels[:len(ex.words)]] for ex in examples[name]]   # tags as probabilities
+        out[f"{name}/oracle_f1"] = scores(counts_per_post(*gold_and_predicted(examples[name], gold)))["f1"]
+    return out
 
 
 class ValScore(L.Callback):
@@ -69,7 +65,8 @@ class ValScore(L.Callback):
     def on_validation_epoch_end(self, trainer, module):
         data = trainer.datamodule
         for name, predictions in self.outputs.items():
-            y_true, y_pred = strings(data.examples[name], predictions)
+            examples = [data.examples[name][i] for i, _ in predictions]
+            y_true, y_pred = gold_and_predicted(examples, [probs for _, probs in predictions])
             counts = counts_per_post(y_true, y_pred)
             for metric, value in scores(counts).items():
                 module.log(f"{name}/{metric}", value, prog_bar=metric == "f1")
@@ -119,10 +116,10 @@ def run(cfg: Config):
     trainer.fit(model, datamodule=data)
 
     model, _ = load_model(checkpoint.best_model_path)
-    word = {split: predict_probs(model, data.examples[split], cfg.data.eval_batch_size) for split in SPLITS}
+    word = {split: predict_probs(model, data.examples[split]) for split in SPLITS}
     probs = run_dir / "probs.npz"
     save_probs(probs, word)
-    path, raw_path = write_submissions(name, data.test_ids, list(zip(data.examples["test"], word["test"])))
+    path, raw_path = write_submissions(name, data.test_ids, data.examples["test"], word["test"])
 
     logger.experiment.summary["best/" + cfg.monitor] = checkpoint.best_model_score.item()
     outputs = wandb.Artifact(f"submission-{logger.version}", type="submission")

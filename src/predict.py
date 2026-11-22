@@ -10,10 +10,9 @@ import argparse
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
 
 from src.config import config_from_dict
-from src.dataset import SPLITS, BucketSampler, NERDataset, build_examples, collate, load_eval
+from src.dataset import SPLITS, build_examples, load_eval, loader
 from src.model import TaggerModule
 from src.vocab import saved_vocab
 
@@ -37,12 +36,11 @@ def load_model(path):
 
 
 @torch.no_grad()
-def predict_probs(model, examples, batch_size):
+def predict_probs(model, examples):
     """[words, 3] probabilities of every example, each post read whole."""
     model.eval().to(device())
-    sampler = BucketSampler([len(ex.ids) for ex in examples], batch_size, shuffle=False)
     probs = [None] * len(examples)
-    for batch in DataLoader(NERDataset(examples), batch_sampler=sampler, collate_fn=collate):
+    for batch in loader(examples, model.cfg.data.eval_batch_size):
         batch = {k: v.to(model.device) if torch.is_tensor(v) else v for k, v in batch.items()}
         for row, i in zip(model.probs(batch).cpu().numpy(), batch["idx"].tolist()):
             probs[i] = row[:len(examples[i].words)]
@@ -72,6 +70,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
     model, vocab = load_model(args.checkpoint)
     posts = load_eval()
-    save_probs(args.out, {split: predict_probs(model, build_examples(posts[split], vocab), model.cfg.data.eval_batch_size)
-                          for split in SPLITS})
+    save_probs(args.out, {split: predict_probs(model, build_examples(posts[split], vocab)) for split in SPLITS})
     print("written", args.out)

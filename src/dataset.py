@@ -160,6 +160,12 @@ def collate(batch):
     }
 
 
+def loader(examples, batch_size, shuffle=False):
+    """Batches of posts of similar length; shuffled for training, in a fixed order otherwise."""
+    sampler = BucketSampler([len(ex.ids) for ex in examples], batch_size, shuffle)
+    return DataLoader(NERDataset(examples), batch_sampler=sampler, collate_fn=collate)
+
+
 class NERDataModule(L.LightningDataModule):
     def __init__(self, cfg: Config):
         super().__init__()
@@ -174,14 +180,8 @@ class NERDataModule(L.LightningDataModule):
         self.vocab = build_vocab(self.cfg.vocab, posts)
         self.examples = {name: build_examples(p, self.vocab) for name, p in posts.items()}
 
-    def loader(self, name, shuffle=False):
-        examples = self.examples[name]
-        size = self.cfg.data.batch_size if shuffle else self.cfg.data.eval_batch_size
-        sampler = BucketSampler([len(ex.ids) for ex in examples], size, shuffle)
-        return DataLoader(NERDataset(examples), batch_sampler=sampler, collate_fn=collate)
-
     def train_dataloader(self):
-        return self.loader("train", shuffle=True)
+        return loader(self.examples["train"], self.cfg.data.batch_size, shuffle=True)
 
     def val_dataloader(self):
-        return [self.loader(name) for name in EVAL_SETS]
+        return [loader(self.examples[name], self.cfg.data.eval_batch_size) for name in EVAL_SETS]

@@ -25,13 +25,19 @@ def answers(example, probs, rampart=True, repairs=SPAN_REPAIRS, policy=POLICY):
     return list(dict.fromkeys(s for s in (text[a:b] for a, b in spans) if hard_processing(s)))
 
 
-def write_submissions(name, test_ids, test):
-    """submission/<name>.csv and <name>_raw.csv from (example, word probabilities) of every test post. `_raw`:
-    without the test policy, to see which submission rules the relabelled train has made redundant."""
+def gold_and_predicted(examples, probs, **kw):
+    """Gold and predicted names of every post, by the answers path without the test policy: the model alone, as val
+    and sample are scored. `kw`: the ablations of answers()."""
+    return [ex.locations for ex in examples], [answers(ex, p, policy=[], **kw) for ex, p in zip(examples, probs)]
+
+
+def write_submissions(name, test_ids, examples, probs):
+    """submission/<name>.csv and <name>_raw.csv from the test posts and their word probabilities. `_raw`: without
+    the test policy, to see which submission rules the relabelled train has made redundant."""
     SUBMISSION_DIR.mkdir(exist_ok=True)
     paths = SUBMISSION_DIR / f"{name}.csv", SUBMISSION_DIR / f"{name}_raw.csv"
     for path, policy in zip(paths, (POLICY, [])):
-        rows = [answers(ex, p, policy=policy) for ex, p in test]
+        rows = [answers(ex, p, policy=policy) for ex, p in zip(examples, probs)]
         pd.DataFrame({"text_id": test_ids, "locations": [json.dumps(r, ensure_ascii=False) for r in rows]}
                      ).sort_values("text_id").to_csv(path, index=False)
     return paths

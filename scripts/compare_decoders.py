@@ -14,13 +14,13 @@ import argparse
 import pandas as pd
 
 from src.config import SUBMISSION_DIR
-from src.dataset import load_eval
+from src.dataset import EVAL_SETS, load_eval
 from src.decoding import SPAN_REPAIRS
 from src.ensemble import ensemble_probs
 from src.label_policy import POLICY
 from src.metric import bootstrap_delta, counts_per_post, scores
 from src.predict import load_probs
-from src.submission import answers
+from src.submission import answers, gold_and_predicted
 
 BASE = "rampart"
 CONFIGS = {
@@ -36,7 +36,7 @@ def main(paths):
     members = [load_probs(p) for p in paths]
     examples = load_eval()
     probs = ensemble_probs(members, [1.0] * len(members), examples)
-    scored = [s for s in ("val", "sample") if s in probs]   # val is gone when the .npz predate the current val
+    scored = [s for s in EVAL_SETS if s in probs]   # val is gone when the .npz predate the current val
     test = list(zip(examples["test"], probs["test"]))
     base_test = [set(answers(ex, p)) for ex, p in test]
 
@@ -47,8 +47,7 @@ def main(paths):
     for label, kw in CONFIGS.items():
         row = {"config": label}
         for split in scored:
-            pred = [answers(ex, p, policy=[], **kw) for ex, p in zip(examples[split], probs[split])]
-            c = counts_per_post([ex.locations for ex in examples[split]], pred)
+            c = counts_per_post(*gold_and_predicted(examples[split], probs[split], **kw))
             row.update({f"{split}_{k}": v for k, v in scores(c).items()})
             if split == scored[0]:
                 counts[label] = c

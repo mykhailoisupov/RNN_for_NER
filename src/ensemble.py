@@ -7,10 +7,10 @@ import argparse
 import pandas as pd
 
 from src.config import SUBMISSION_DIR
-from src.dataset import SPLITS, load_eval, load_test_ids
+from src.dataset import EVAL_SETS, SPLITS, load_eval, load_test_ids
 from src.metric import counts_per_post, scores
 from src.predict import load_probs
-from src.submission import answers, write_submissions
+from src.submission import gold_and_predicted, write_submissions
 
 
 def average(members, weights, split):
@@ -38,16 +38,15 @@ def run(paths, weights, name):
     probs = ensemble_probs(members, weights, examples)
 
     row = {}
-    for split in [s for s in ("val", "sample") if s in probs]:
-        pred = [answers(ex, p, policy=[]) for ex, p in zip(examples[split], probs[split])]
-        c = counts_per_post([ex.locations for ex in examples[split]], pred)
+    for split in [s for s in EVAL_SETS if s in probs]:
+        c = counts_per_post(*gold_and_predicted(examples[split], probs[split]))
         row.update({f"{split}_{k}": v for k, v in scores(c).items()})
     table = pd.DataFrame([row])
     SUBMISSION_DIR.mkdir(exist_ok=True)
     table.to_csv(SUBMISSION_DIR / f"{name}_scores.csv", index=False)
     print(table.round(4).to_string(index=False))
 
-    for path in write_submissions(name, test_ids, list(zip(examples["test"], probs["test"]))):
+    for path in write_submissions(name, test_ids, examples["test"], probs["test"]):
         print("written", path)
 
 

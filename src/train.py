@@ -78,7 +78,7 @@ class ValScore(L.Callback):
 
 
 def fit(cfg: Config, name, data):
-    """Train the tagger -> the W&B logger of the run and the path of its best checkpoint, models/<name>-<id>/best.ckpt."""
+    """Train the tagger -> the W&B logger of the run and the path of its best checkpoint, models/<name>-<id>/."""
     model = TaggerModule(cfg, data.vocab)
 
     logger = WandbLogger(

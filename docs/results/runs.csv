@@ -1,0 +1,5 @@
+model,run_id,embedding,rnn,gpu,epochs_run,best_epoch,val/f1,val/precision,val/recall,val/loss,val/f1_seen,val/f1_unseen,val/f1_uk,val/f1_ru,val/f1_tg,sample/f1,lb/f1,runtime_min
+A fastText+Flair BiLSTM,wzoh8guc,fasttext+flair,lstm,NVIDIA L4,7,4,0.8834,0.9093,0.8589,0.0152,0.9234,0.7672,0.8709,0.9478,0.8915,0.8267,0.6657,93
+B Flair BiLSTM,nfece7iu,flair,lstm,NVIDIA L4,7,4,0.8783,0.9099,0.8488,0.0157,0.9198,0.7581,0.8639,0.9464,0.8883,0.8219,0.6587,93
+C fastText BiLSTM,3yd46rm3,fasttext,lstm,NVIDIA L4,10,7,0.8821,0.9128,0.8535,0.0158,0.9236,0.7613,0.871,0.9447,0.8889,0.8378,0.6677,63
+D fastText BiGRU,pbue6w0u,fasttext,gru,Tesla T4,8,5,0.877,0.9069,0.849,0.017,0.9195,0.7531,0.8619,0.94,0.8884,0.8158,0.6468,67

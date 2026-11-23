@@ -1,0 +1,9 @@
+name,kind,val_f1,lb_f1
+A,model,0.8834,0.66568
+B,model,0.8783,0.65875
+C,model,0.8821,0.66766
+D,model,0.8770,0.64679
+A+C,ensemble,0.8857,0.66567
+A+B+C,ensemble,0.8852,0.66766
+A+C+D,ensemble,0.8841,0.65378
+A+B+C+D,ensemble,0.8846,0.66071

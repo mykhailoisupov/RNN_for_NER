@@ -4,6 +4,7 @@
 !/docs/.gitkeep
 !/docs/architectures.md
 !/docs/historic/
+!/docs/figures/
 .venv/
 .ipynb_checkpoints/
 __pycache__/

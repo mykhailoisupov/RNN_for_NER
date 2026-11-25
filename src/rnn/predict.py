@@ -1,18 +1,18 @@
-"""Checkpoint of src.train -> word probabilities of every post, and the .npz they are kept in (float16 rows + lengths
-per split), which src.ensemble averages.
+"""Checkpoint of src.rnn.train -> word probabilities of every post -> the .npz of src.ensemble.save_probs.
 
-    python -m src.predict models/<run>/best.ckpt --out models/<run>/probs.npz
+    python -m src.rnn.predict models/<run>/best.ckpt --out models/<run>/probs.npz
 
 Posts are read whole, as ValScore reads val. 256/64-word windows (LB 0.66180 -> 0.66277 on 2026-11-20, when train
 posts had at most 352 tokens) went when train got posts of up to 615; code at commit 9d4aa46.
 """
 import argparse
 
-import numpy as np
 import torch
 
-from src.dataset import SPLITS, build_examples, load_eval, loader
-from src.model import TaggerModule
+from src.dataset import SPLITS, load_eval
+from src.ensemble import save_probs
+from src.rnn.dataset import build_examples, loader
+from src.rnn.model import TaggerModule
 
 
 def device():
@@ -33,22 +33,6 @@ def predict_probs(model, examples):
         for row, i in zip(model.probs(batch).cpu().numpy(), batch["idx"].tolist()):
             probs[i] = row[:len(examples[i].words)]
     return probs
-
-
-def save_probs(path, probs):
-    arrays = {}
-    for split, rows in probs.items():
-        arrays[split] = np.concatenate(rows).astype(np.float16)
-        arrays[f"{split}_lengths"] = np.array([len(r) for r in rows])
-    np.savez_compressed(path, **arrays)
-
-
-def load_probs(path):
-    data = np.load(path)
-    return {
-        split: np.split(data[split].astype(np.float32), np.cumsum(data[f"{split}_lengths"])[:-1])
-        for split in SPLITS if split in data.files
-    }
 
 
 if __name__ == "__main__":

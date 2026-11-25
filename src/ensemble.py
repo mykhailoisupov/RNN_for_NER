@@ -1,16 +1,33 @@
-"""Several .npz of word probabilities -> their weighted average -> answers -> the submission csv (+ `_raw`).
+"""Several .npz of word probabilities -> their weighted average -> answers -> the submission csv (+ `_raw`). The .npz
+(float16 rows + lengths per split) is written by save_probs, the same for every model.
 
     python -m src.ensemble models/<run>/probs.npz models/<run>/probs.npz ... --name <name>
 """
 import argparse
 
+import numpy as np
 import pandas as pd
 
 from src.config import SUBMISSION_DIR
 from src.dataset import EVAL_SETS, SPLITS, load_eval, load_test_ids
 from src.metric import counts_per_post, scores
-from src.predict import load_probs
 from src.submission import gold_and_predicted, write_submissions
+
+
+def save_probs(path, probs):
+    arrays = {}
+    for split, rows in probs.items():
+        arrays[split] = np.concatenate(rows).astype(np.float16)
+        arrays[f"{split}_lengths"] = np.array([len(r) for r in rows])
+    np.savez_compressed(path, **arrays)
+
+
+def load_probs(path):
+    data = np.load(path)
+    return {
+        split: np.split(data[split].astype(np.float32), np.cumsum(data[f"{split}_lengths"])[:-1])
+        for split in SPLITS if split in data.files
+    }
 
 
 def average(members, weights, split):
@@ -20,7 +37,7 @@ def average(members, weights, split):
 def ensemble_probs(members, weights, posts):
     """Weighted average per split; a split is skipped when some .npz were made on other posts or by another tokenizer
     (val changes with every build_dataset). test must match: after a tokenizer change, remake the .npz with
-    src.predict."""
+    the model's predict (src.rnn.predict)."""
     probs = {}
     for split in SPLITS:
         want = [len(post.words) for post in posts[split]]

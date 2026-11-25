@@ -71,7 +71,7 @@ probes, one rule per submission (section 6).
 - In 4,786 ru groups the copies disagree on labels.
 - No test post appears in any source, in full or in part.
 
-**Adversarial validation** (`notebooks/adversarial_validation.ipynb`). A BiGRU learns to tell test texts from train
+**Adversarial validation** (`notebooks/rnn_adversarial_validation.ipynb`). A BiGRU learns to tell test texts from train
 texts; we report out-of-fold ROC AUC.
 
 | Comparison | Given data | Our built data | Text length alone, built data |
@@ -133,7 +133,7 @@ therefore scores worse than no answer at all. This is why labelling conventions 
 
 As an alternative target we propose entity F1 with proper normalisation and partial credit for token overlap. It keeps
 the set semantics, but rewards finding a location more than copying the annotator's boundaries. Useful complementary
-metrics are precision and recall separately, F1 on names unseen in train, and F1 per language. `src/train.py` logs
+metrics are precision and recall separately, F1 on names unseen in train, and F1 per language. `src/rnn/train.py` logs
 all of them each epoch.
 
 ## 3. Validation
@@ -204,7 +204,7 @@ frozen fastText (300) or Flair (2048) → dropout 0.3 → BiLSTM, 2 layers × 25
 
 **The code on `main` has a newer model.**
 - Inputs: fastText + Flair + a character CNN + a word-shape embedding, with word dropout.
-- Output: a linear-chain CRF (`src/crf.py`). Its marginals feed the same decoding and ensemble code.
+- Output: a linear-chain CRF (`src/rnn/crf.py`). Its marginals feed the same decoding and ensemble code.
 - Training: the learning rate halves after an epoch without a val gain.
 - Every setting is a flag: `--model.rnn gru --model.num_layers 1 --model.bidirectional false --optim.scheduler cosine
   --vocab.freeze_embeddings false`.
@@ -378,14 +378,14 @@ unzip data/kse-ua-location-extraction-2026.zip -d data
 uv run python -m scripts.fetch_ubertext            # Telegram sentences → data/tg_geo_dataset.csv
 uv run python -m scripts.build_dataset --upload    # data/normalized/, logged to W&B as `normalized`
 
-uv run --env-file .env python -m src.train --vocab.embedding fasttext
-uv run python -m src.predict models/<run>/best.ckpt --out models/<run>/probs.npz
+uv run --env-file .env python -m src.rnn.train --vocab.embedding fasttext
+uv run python -m src.rnn.predict models/<run>/best.ckpt --out models/<run>/probs.npz
 uv run python -m src.ensemble models/<a>/probs.npz models/<b>/probs.npz --name ens    # submission/ens.csv
 uv run python -m scripts.compare_decoders models/<a>/probs.npz ...                   # post-processing ablations
 uv run --group eda --env-file .env python -m scripts.figures                        # docs/figures/
 ```
 
-On Colab, `notebooks/train.ipynb` clones `main`, downloads the data and the latest `normalized` artifact, and runs
+On Colab, `notebooks/rnn_train.ipynb` clones `main`, downloads the data and the latest `normalized` artifact, and runs
 one experiment per cell.
 
 Each run logs its best checkpoint (`model-<run id>`) to W&B, together with its submission files and `probs.npz`
@@ -398,26 +398,29 @@ at the commits they were trained on: `1da6a94`, `02b9df9` and `49ad446`.
 data/                    competition files, embeddings, normalized/ (not in git)
 docs/figures/            training curves, gradient flow
 docs/historic/           BPE vs words; threshold, merging and policy ablations
-notebooks/               EDA, adversarial validation, Colab training
+notebooks/               EDA, adversarial validation (rnn_, transformer_), Colab RNN training
 scripts/
 ├── build_dataset.py     sources → test-like posts → train/val
 ├── fetch_ubertext.py    Telegram sentences (UberText-NER-Silver)
 ├── compare_decoders.py  post-processing ablations
 └── figures.py           report figures from W&B
 src/
-├── config.py            paths, run config, CLI flags
+├── config.py            paths
 ├── tokenizer.py         1:1 normalisation, word tokens
 ├── tags.py              O/B/I, spans ↔ tags
-├── vocab.py             fastText vocabulary, characters, word shape
-├── dataset.py           posts → examples → length-bucketed batches
-├── model.py             embedders, BiLSTM/BiGRU, training module
-├── crf.py               linear-chain CRF
-├── train.py             training, per-epoch val/sample scores, export
-├── predict.py           checkpoint → probs.npz
+├── dataset.py           files → tokenized, tagged posts
 ├── decoding.py          Viterbi, rampart, span repairs
 ├── label_policy.py      how test labels names
 ├── submission.py        probabilities → answers → csv
-├── ensemble.py          probability averaging
+├── ensemble.py          probs.npz, probability averaging
 ├── metric.py            competition metric
-└── colab.py             Colab setup
+├── colab.py             Colab setup
+└── rnn/
+    ├── config.py        run config, CLI flags
+    ├── vocab.py         fastText vocabulary, characters, word shape
+    ├── dataset.py       posts → examples → length-bucketed batches
+    ├── model.py         embedders, BiLSTM/BiGRU, training module
+    ├── crf.py           linear-chain CRF
+    ├── train.py         training, per-epoch val/sample scores, export
+    └── predict.py       checkpoint → probs.npz
 ```

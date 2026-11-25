@@ -7,7 +7,8 @@ from collections import Counter
 
 import numpy as np
 
-from src.config import EMBEDDINGS_DIR, VocabConfig
+from src.config import EMBEDDINGS_DIR
+from src.rnn.config import VocabConfig
 
 PAD, UNK = 0, 1   # ids 0 and 1 of every table: words, characters
 

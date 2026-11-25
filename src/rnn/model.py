@@ -11,11 +11,11 @@ from torch import nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from torch.optim.lr_scheduler import CosineAnnealingLR, OneCycleLR, ReduceLROnPlateau
 
-from src.config import Config, ModelConfig, VocabConfig, config_from_dict
-from src.crf import CRF
 from src.dataset import EVAL_SETS
+from src.rnn.config import Config, ModelConfig, VocabConfig, config_from_dict
+from src.rnn.crf import CRF
 from src.tags import TAGS
-from src.vocab import CHARS, PAD, SHAPES, saved_vocab
+from src.rnn.vocab import CHARS, PAD, SHAPES, saved_vocab
 
 
 RNNS = {"lstm": nn.LSTM, "gru": nn.GRU}
@@ -221,7 +221,7 @@ class TaggerModule(L.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
-        """-> token probabilities, for the F1 callback in src.train."""
+        """-> token probabilities, for the F1 callback in src.rnn.train."""
         emissions = self(batch)
         name = EVAL_SETS[dataloader_idx]
         self.log(f"{name}/loss", self.loss(emissions, batch), add_dataloader_idx=False, batch_size=len(batch["idx"]))

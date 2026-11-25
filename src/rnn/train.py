@@ -1,7 +1,7 @@
 """A training run: fit the tagger, scoring val and sample every epoch, then the best checkpoint -> probs.npz of every
 split and the submission.
 
-    python -m src.train --epochs 10 --model.hidden_size 512    # one flag per Config field
+    python -m src.rnn.train --epochs 10 --model.hidden_size 512    # one flag per Config field
 """
 from dataclasses import asdict
 from pathlib import Path
@@ -12,11 +12,14 @@ import wandb
 from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
 
-from src.config import MODELS_DIR, WANDB_ENTITY, WANDB_PROJECT, Config, config_from_args, dotted_fields
-from src.dataset import EVAL_SETS, SPLITS, NERDataModule
+from src.config import MODELS_DIR, WANDB_ENTITY, WANDB_PROJECT
+from src.dataset import EVAL_SETS, SPLITS
+from src.ensemble import save_probs
 from src.metric import counts_per_post, hard_processing, scores
-from src.model import TaggerModule
-from src.predict import predict_probs, save_probs
+from src.rnn.config import Config, config_from_args, dotted_fields
+from src.rnn.dataset import NERDataModule
+from src.rnn.model import TaggerModule
+from src.rnn.predict import predict_probs
 from src.submission import gold_and_predicted, write_submissions
 from src.tags import TAGS
 

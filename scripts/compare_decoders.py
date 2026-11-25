@@ -16,10 +16,9 @@ import pandas as pd
 from src.config import SUBMISSION_DIR
 from src.dataset import EVAL_SETS, load_eval
 from src.decoding import SPAN_REPAIRS
-from src.ensemble import ensemble_probs
+from src.ensemble import ensemble_probs, load_probs
 from src.label_policy import POLICY
 from src.metric import bootstrap_delta, counts_per_post, scores
-from src.predict import load_probs
 from src.submission import answers, gold_and_predicted
 
 BASE = "rampart"

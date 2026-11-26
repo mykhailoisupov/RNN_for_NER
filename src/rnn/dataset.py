@@ -11,8 +11,7 @@ from torch.utils.data import DataLoader, Dataset, Sampler
 from src.dataset import EVAL_SETS, load_eval, load_test_ids, load_train, load_val_langs
 from src.rnn.config import Config
 from src.rnn.vocab import MAX_WORD_CHARS, PAD, UNK, build_vocab, encode_chars, word_shape
-
-IGNORE = -100
+from src.tags import IGNORE
 
 
 @dataclass

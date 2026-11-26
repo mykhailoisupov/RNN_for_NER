@@ -1,6 +1,5 @@
 """Hyperparameters of an RNN run, grouped by the component that reads them; one CLI flag of src.rnn.train per field."""
-import argparse
-from dataclasses import asdict, dataclass, field, fields, is_dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -52,31 +51,3 @@ class Config:
     wandb_mode: str = "online"
     name: str = ""
 
-
-def config_from_dict(values, cls=Config):
-    """Config of a checkpoint (asdict): fields it lacks take their defaults, fields since removed are dropped."""
-    known = {f.name: f for f in fields(cls)}
-    return cls(**{k: config_from_dict(v, known[k].type) if is_dataclass(known[k].type) else v
-                  for k, v in values.items() if k in known})
-
-
-def dotted_fields(cfg: Config):
-    """(`model.hidden_size`, value) for every field of the Config and of its groups: the CLI flags and run names."""
-    for key, value in asdict(cfg).items():
-        if isinstance(value, dict):
-            yield from ((f"{key}.{k}", v) for k, v in value.items())
-        else:
-            yield key, value
-
-
-def config_from_args():
-    """`--epochs 10`, `--model.hidden_size 512`: one flag per field."""
-    parser = argparse.ArgumentParser()
-    for key, default in dotted_fields(Config()):
-        kind = (lambda v: v.lower() in {"1", "true", "yes"}) if isinstance(default, bool) else type(default)
-        parser.add_argument(f"--{key}", type=kind, default=default)
-    cfg = Config()
-    for key, value in vars(parser.parse_args()).items():
-        *group, name = key.split(".")
-        setattr(getattr(cfg, group[0]) if group else cfg, name, value)
-    return cfg

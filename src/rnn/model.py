@@ -12,7 +12,8 @@ from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from torch.optim.lr_scheduler import CosineAnnealingLR, OneCycleLR, ReduceLROnPlateau
 
 from src.dataset import EVAL_SETS
-from src.rnn.config import Config, ModelConfig, VocabConfig, config_from_dict
+from src.cli_config import config_from_dict
+from src.rnn.config import Config, ModelConfig, VocabConfig
 from src.rnn.crf import CRF
 from src.tags import TAGS
 from src.rnn.vocab import CHARS, PAD, SHAPES, saved_vocab
@@ -242,7 +243,7 @@ class TaggerModule(L.LightningModule):
         """A checkpoint of on_save_checkpoint -> the model and its vocabulary; the data is not needed. Only Flair's
         weights may be missing, as they are left out there."""
         checkpoint = torch.load(path, map_location="cpu", weights_only=False)
-        cfg = config_from_dict(checkpoint["config"])
+        cfg = config_from_dict(checkpoint["config"], Config)
         module = cls(cfg, saved_vocab(cfg.vocab, checkpoint["vocab"]))
         missing, unexpected = module.load_state_dict(checkpoint["state_dict"], strict=False)
         flair = module._flair_prefixes()

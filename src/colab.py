@@ -1,4 +1,4 @@
-"""Setup of a Colab session for notebooks/rnn_train.ipynb: keys, packages, the W&B login, the competition data and the
+"""Setup of a Colab session for notebooks/rnn_train.ipynb and transformer_train.ipynb: keys, packages, the W&B login, the competition data and the
 train/val of scripts.build_dataset. load_env reads the same .env locally."""
 import importlib.util
 import os
@@ -12,8 +12,11 @@ from pathlib import Path
 
 from src.config import DATA_DIR, KAGGLE_COMPETITION, NORMALIZED_DIR, ROOT, WANDB_ENTITY, WANDB_PROJECT
 
-PACKAGES = {"lightning": "lightning", "wandb": "wandb", "kaggle": "kaggle", "flair": "flair>=0.15",
+PACKAGES = {"wandb": "wandb", "kaggle": "kaggle",
             "pymorphy3": "pymorphy3", "pymorphy3_dicts_uk": "pymorphy3-dicts-uk", "pymorphy3_dicts_ru": "pymorphy3-dicts-ru"}
+RNN_PACKAGES = {"lightning": "lightning", "flair": "flair>=0.15"}
+# installed every time: Colab has transformers 5, which renamed the TrainingArguments src.transformer.train uses
+TRANSFORMER_PACKAGES = ["transformers>=4.57.6,<5", "accelerate", "sentencepiece", "protobuf"]
 DATA_FILES = ["test.csv", "labeling_sample.csv"]
 NORMALIZED = ["train.parquet", "val.parquet"]
 ENV_FILES = [Path("/content/.env"), ROOT / ".env"]
@@ -63,8 +66,10 @@ def secret(name):
     return os.environ.get(name) or colab_secret(name) or getpass(f"{name}: ")
 
 
-def install():
-    missing = [spec for module, spec in PACKAGES.items() if importlib.util.find_spec(module) is None]
+def install(transformer=False):
+    packages = PACKAGES if transformer else PACKAGES | RNN_PACKAGES
+    missing = [spec for module, spec in packages.items() if importlib.util.find_spec(module) is None]
+    missing += TRANSFORMER_PACKAGES if transformer else []
     if not missing:
         print("packages: already installed")
         return
@@ -114,11 +119,11 @@ def login_wandb():
     wandb.login(key=secret("WANDB_API_KEY"))
 
 
-def setup():
+def setup(transformer=False):
     with step("1/4 keys"):
         load_env()
     with step("2/4 packages"):
-        install()
+        install(transformer)
     with step("3/4 W&B login"):
         login_wandb()
     with step("4/4 data"):

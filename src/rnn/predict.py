@@ -10,17 +10,10 @@ import argparse
 import torch
 
 from src.dataset import SPLITS, load_eval
+from src.device import device
 from src.ensemble import save_probs
 from src.rnn.dataset import build_examples, loader
 from src.rnn.model import TaggerModule
-
-
-def device():
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
 
 
 @torch.no_grad()

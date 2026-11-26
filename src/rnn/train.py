@@ -16,7 +16,8 @@ from src.config import MODELS_DIR, WANDB_ENTITY, WANDB_PROJECT
 from src.dataset import EVAL_SETS, SPLITS
 from src.ensemble import save_probs
 from src.metric import counts_per_post, hard_processing, scores
-from src.rnn.config import Config, config_from_args, dotted_fields
+from src.cli_config import changed_fields, config_from_args
+from src.rnn.config import Config
 from src.rnn.dataset import NERDataModule
 from src.rnn.model import TaggerModule
 from src.rnn.predict import predict_probs
@@ -30,10 +31,7 @@ def run_name(cfg: Config):
     if cfg.name:
         return cfg.name
     base = f"{cfg.vocab.embedding}-{'bi' if cfg.model.bidirectional else ''}{cfg.model.rnn}"
-    default = dict(dotted_fields(Config()))
-    changes = [f"{key.split('.')[-1]}={value}" for key, value in dotted_fields(cfg)
-               if key.split(".")[-1] not in NAME_SKIP and value != default[key]]
-    return "-".join([base, *changes])
+    return "-".join([base, *changed_fields(cfg, NAME_SKIP)])
 
 
 def oracle_f1(examples):
@@ -150,4 +148,4 @@ def run(cfg: Config):
 
 
 if __name__ == "__main__":
-    run(config_from_args())
+    run(config_from_args(Config))

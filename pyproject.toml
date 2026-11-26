@@ -20,6 +20,12 @@ dependencies = [
 flair = [
     "flair>=0.15",
 ]
+transformer = [
+    "accelerate>=1.15.0",
+    "protobuf>=7.36.2",
+    "sentencepiece>=0.2.3",
+    "transformers>=4.57.6,<5",   # 5 renamed TrainingArguments that src.transformer.train uses
+]
 
 [dependency-groups]
 dev = [

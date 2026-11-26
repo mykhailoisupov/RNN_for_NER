@@ -3,6 +3,7 @@ import re
 
 TAGS = ["O", "B", "I"]       # one entity type: a location
 O, B, I = range(len(TAGS))
+IGNORE = -100               # a label the loss skips: padding, special tokens
 SPAN = re.compile(r"\((\d+),\s*(\d+)\)")
 
 

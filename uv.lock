@@ -3996,6 +3996,12 @@ dependencies = [
 flair = [
     { name = "flair" },
 ]
+transformer = [
+    { name = "accelerate" },
+    { name = "protobuf" },
+    { name = "sentencepiece" },
+    { name = "transformers" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -4011,18 +4017,22 @@ eda = [
 
 [package.metadata]
 requires-dist = [
+    { name = "accelerate", marker = "extra == 'transformer'", specifier = ">=1.15.0" },
     { name = "flair", marker = "extra == 'flair'", specifier = ">=0.15" },
     { name = "lightning", specifier = ">=2.6.6" },
     { name = "numpy", specifier = ">=2.4.6" },
     { name = "pandas", specifier = ">=3.1.1" },
+    { name = "protobuf", marker = "extra == 'transformer'", specifier = ">=7.36.2" },
     { name = "pyarrow", specifier = ">=26.0.1" },
     { name = "pymorphy3", specifier = ">=2.0.6" },
     { name = "pymorphy3-dicts-ru", specifier = ">=2.4.417150.4580142" },
     { name = "pymorphy3-dicts-uk", specifier = ">=2.4.1.1.1663094765" },
+    { name = "sentencepiece", marker = "extra == 'transformer'", specifier = ">=0.2.3" },
     { name = "torch", specifier = ">=2.15.0" },
+    { name = "transformers", marker = "extra == 'transformer'", specifier = ">=4.57.6,<5" },
     { name = "wandb", specifier = ">=0.31.0" },
 ]
-provides-extras = ["flair"]
+provides-extras = ["flair", "transformer"]
 
 [package.metadata.requires-dev]
 dev = [

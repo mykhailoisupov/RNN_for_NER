@@ -10,5 +10,6 @@ MODELS_DIR = ROOT / "models"
 SUBMISSION_DIR = ROOT / "submission"
 
 WANDB_ENTITY = "whoresandbaddies"
-WANDB_PROJECT = "rnn-for-ner"
+WANDB_PROJECT = "rnn-for-ner"                  # RNN runs and the normalized dataset
+WANDB_TRANSFORMER_PROJECT = "transformers-for-ner"
 KAGGLE_COMPETITION = "kse-ua-location-extraction-2026"

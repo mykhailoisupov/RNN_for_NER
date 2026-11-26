@@ -18,6 +18,7 @@ class Post(NamedTuple):
     tokens: list | None   # Token offsets, to cut answers from the text; None for train, which never cuts any
     words: list           # token texts, one str object per distinct word
     labels: list          # O/B/I of every word
+    spans: list           # gold (start, end) character spans; what the transformer labels subwords by
     locations: list       # gold answers
 
 
@@ -28,7 +29,7 @@ def _posts(texts, spans, keep_tokens=True):
         tokens = tokenize(text)
         pairs = [(int(a), int(b)) for a, b in pairs]
         posts.append(Post(text, tokens if keep_tokens else None, [sys.intern(t.text) for t in tokens],
-                          spans_to_tags(tokens, pairs), [text[a:b] for a, b in pairs]))
+                          spans_to_tags(tokens, pairs), pairs, [text[a:b] for a, b in pairs]))
     return posts
 
 

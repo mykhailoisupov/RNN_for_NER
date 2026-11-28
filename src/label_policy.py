@@ -114,7 +114,8 @@ ORG = (r"поліці\w*|нацполіці\w*|поліцейськ\w*|прок�
        r"уряд\w*|президент\w*|влад(?:а|и|і|у|ою)|адміністраці\w*|департамент\w*|управлінн\w*|"
        r"служб(?:а|и|і|у|ою)|фонд\w*|посольств\w*|парламент\w*|СБУ|СБ|ДСНС|ГУНП|ЗСУ|"
        r"полици\w*|мэр(?:а|у|ом|ии|ия|ию)?|министр\w*|министерств\w*|правительств\w*|власт(?:ь|и|ей)|"
-       r"администраци\w*|управлени\w*|служб(?:ы|е|ой)|суд(?:а|е|ы|ов)|госдум\w*|ФСБ|МВД|СК")
+       r"администраци\w*|управлени\w*|служб(?:ы|е|ой)|суд(?:а|е|ы|ов)|госдум\w*|ФСБ|МВД|СК|"
+       r"МЗС|МВС|МИД|Міноборони|Минобороны|канцлер\w*|посол\w*|збірн\w*|сборн\w*")
 PREP = r"(?:у|в|во|на|по|з|із|зі|с|со|из|до|від|от|за|під|под|над|біля|та|і|й|и)"
 # that word, up to 2 lowercase words, then the name: `міністра оборони України`. Not `поліція у Києві`
 ORG_BEFORE = re.compile(rf"\b(?:{ORG})(?:[ \t\xa0]+(?!{PREP}[ \t\xa0])(?-i:[а-яіїєґё][а-яіїєґё'ʼ’.-]*)){{0,2}}[ \t\xa0]+$",
@@ -149,13 +150,18 @@ def in_org_name(text, a, b):
                         for w in (w.strip(".-'’ʼ") for w in org.group().split()[1:])))
 
 
+# a city service written as one word: `Київраді`, `Київпастранс`; train labels 7% of them
+KYIV_COMPOUND = re.compile(r"Київ(?:рад|водоканал|теплоенерго|пастранс|автодор|стар)\w*")
+
+
 def drop_org_names(text, spans):
-    return [(a, b) for a, b in spans if not in_org_name(text, a, b)]
+    return [(a, b) for a, b in spans if not (in_org_name(text, a, b) or KYIV_COMPOUND.fullmatch(text, a, b))]
 
 
 # --- drop_common_nouns ------------------------------------------------------------------------------------------
-# «столиця», Kyiv in test: kept in lowercase. Not labelled by the policy any more (LB +0.0049 without, 2026-11-22)
-CAPITAL = re.compile(r"(?i)столиц(?:я|і|ю|ею)")
+# «столиця», Kyiv in test: kept in lowercase. Not labelled at submit (LB +0.0049 without, 2026-11-22); train labels it
+# after a preposition (build_dataset.label_capital)
+CAPITAL = re.compile(r"(?i)(?<!\w)столиц(?:я|і|ю|ею)(?!\w)")
 # `брянської`: an adjective made from a place name, a name even in lowercase
 REGION_ADJ = re.compile(r"\w+(?:ськ|цьк|зьк)(?:ої|ій|а|ий|ого|ому|ою|ие|ой|ая)")
 # names that media also write in lowercase: `москви`, `рф`

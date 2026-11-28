@@ -21,12 +21,15 @@ import pandas as pd
 
 from src.colab import load_env
 from src.config import DATA_DIR, NORMALIZED_DIR, ROOT, WANDB_ENTITY, WANDB_PROJECT
-from src.label_policy import JOINS, LOWERABLE, REGION_ADJ, REST, STREET, can_be, clean_spans, join_house_number, relabel
+from src.label_policy import (CAPITAL, JOINS, LOWERABLE, REGION_ADJ, REST, STREET, can_be, clean_spans,
+                              join_house_number, relabel)
 from src.tags import aligned, parse_spans
 from src.tokenizer import prepare, tokenize
 
 RU_SHARE, VAL_RU_SHARE = 0.20, 0.08
 TG_SHARE = 0.25                           # posts from Telegram sentences (scripts.fetch_ubertext), train and val
+KYIV_SHARE, SYNTH_SHARE = 0.05, 0.015     # train posts of scripts.kyiv_posts: Kyiv channels / LLM-written; repeated to fit
+KYIV_VAL_PCT = 10                         # % of the Kyiv channel posts sent to val, each once
 VAL_PCT, VAL_PCT_RARE = 5, 10             # % of uk sentences sent to val: ordinary / with Kyiv or a street
 HELD_PCT, HELD_MAX = 10, 50               # % of the name stems of at most 50 sentences that are held out for val
 FOOTER_SHARE = 0.05                       # posts that end with a blank line, left of a channel signature (test: 31%)
@@ -71,8 +74,20 @@ def label_kyiv(text, spans):
     return spans + [m.span() for m in KYIV.finditer(text) if not any(c < m.end() and m.start() < d for c, d in spans)]
 
 
+CAPITAL_PREP = re.compile(r"(?<!\w)(?:у|в|на|до|з|із|зі|від|по|під|над|біля|через|для|за|навколо|поблизу)\s+$", re.I)
+
+
+def label_capital(text, spans):
+    """`у столиці` is a place, `гостей столиці` is not. Test labels «столиця» about half the time: the model's own
+    answers were right in ~0.57 of the cases (LB 2026-11-28), the ones a rule added in ~0.17 (LB 2026-11-22); a label
+    right after a preposition fits both. Train only."""
+    kept = [s for s in spans if not CAPITAL.fullmatch(text, *s)]
+    after_prep = [m.span() for m in CAPITAL.finditer(text) if CAPITAL_PREP.search(text, max(0, m.start() - 10), m.start())]
+    return kept + [(a, b) for a, b in after_prep if not any(c < b and a < d for c, d in kept)]
+
+
 #  join_house_number: train only, as test writes addresses (`вул. Хрещатик, 28`); it moved no LB answer at submit
-TRAIN_POLICY = JOINS + [join_house_number, label_kyiv] + REST
+TRAIN_POLICY = JOINS + [join_house_number, label_kyiv, label_capital] + REST
 
 
 def crc(value):
@@ -433,7 +448,9 @@ def profile(posts):
             "short line": 100 * posts.text.map(short_line).mean(),
             "caps line": 100 * posts.text.map(caps_line).mean(),
             "caps words / 1000": 1000 * posts.text.str.count(CAPS_WORD.pattern).sum() / f.words.sum(),
-            "ru": 100 * posts.lang.eq("ru").mean(), "tg": 100 * posts.lang.eq("tg").mean(), "posts": len(posts)}
+            "ru": 100 * posts.lang.eq("ru").mean(), "tg": 100 * posts.lang.eq("tg").mean(),
+            "kyiv channels": 100 * posts.lang.eq("kyiv").mean(), "llm-written": 100 * posts.lang.eq("synth").mean(),
+            "posts": len(posts)}
 
 
 # --- build ------------------------------------------------------------------------------------------------------------
@@ -474,6 +491,13 @@ def build(rebuild=False, ru_share=RU_SHARE, tg_share=TG_SHARE, seed=0):
         sent["spans"] = [[(int(a), int(b)) for a, b in spans] for spans in sent.spans]
         sentences[lang] = sent
 
+    whole = None   # posts labelled by an LLM (scripts.kyiv_posts): used as they are, no gluing, no augmentation
+    if (DATA_DIR / "kyiv_posts.csv").exists():
+        whole = pd.read_csv(DATA_DIR / "kyiv_posts.csv")
+        whole["spans"] = whole.loc_markers.map(parse_spans)
+        in_val = whole.kind.eq("kyiv") & (whole.text.map(crc) % 100 < KYIV_VAL_PCT)   # LLM-written posts: train only
+        whole["split"] = np.where(in_val, "val", "train")
+
     rng = np.random.default_rng(seed)
     aug = random.Random(seed)   # one stream for every augmentation: no two of them draw the same numbers
     result = {}
@@ -494,9 +518,16 @@ def build(rebuild=False, ru_share=RU_SHARE, tg_share=TG_SHARE, seed=0):
             texts = add_blank_footer(texts, FOOTER_SHARE, aug)
             parts[lang] = posts.assign(text=texts, spans=spans)
             _report(f"{split} {lang}: removal of data without names")
-        shares = {lang: share for lang, share in (("ru", ru), ("tg", tg_share)) if lang in parts}
+        if whole is not None:
+            for kind, group in whole[whole.split.eq(split)].groupby("kind"):
+                parts[kind] = group[["text", "spans"]].assign(lang=kind)
+        repeated = {"kyiv": KYIV_SHARE, "synth": SYNTH_SHARE} if split == "train" else {}   # val keeps each Kyiv post once
+        shares = {lang: share for lang, share in {"ru": ru, "tg": tg_share, **repeated}.items() if lang in parts}
         for lang, share in shares.items():   # shares of all posts; uk is the rest
             wanted = round(len(parts["uk"]) * share / (1 - sum(shares.values())))
+            if lang in repeated:             # a few thousand posts for a share of train: every post several times
+                parts[lang] = parts[lang].sample(n=wanted, replace=wanted > len(parts[lang]), random_state=seed)
+                continue
             if wanted > len(parts[lang]):
                 print(f"  only {len(parts[lang]):,} {lang} posts for {wanted:,} wanted: lower --{lang}-share")
             parts[lang] = parts[lang].sample(n=min(wanted, len(parts[lang])), random_state=seed)

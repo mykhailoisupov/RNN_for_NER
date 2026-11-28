@@ -11,6 +11,7 @@ from dataclasses import asdict
 import numpy as np
 import torch
 import wandb
+from torch.utils.data import SequentialSampler
 from transformers import Trainer, TrainingArguments, set_seed
 
 from src.cli_config import changed_fields, config_from_args
@@ -54,6 +55,13 @@ class Scorer:
         return out
 
 
+class OrderedEvalTrainer(Trainer):
+    """group_by_length shuffles eval windows too (transformers 4.57); Scorer cuts them by position, so eval stays in order."""
+
+    def _get_eval_sampler(self, eval_dataset):
+        return SequentialSampler(eval_dataset)
+
+
 def fit(cfg: Config, run_dir, posts, tokenizer):
     """Fine-tune -> the model of the best epoch by val F1."""
     data = cfg.data
@@ -85,7 +93,7 @@ def fit(cfg: Config, run_dir, posts, tokenizer):
         logging_steps=50,
         remove_unused_columns=False,
     )
-    trainer = Trainer(
+    trainer = OrderedEvalTrainer(
         model=load_model(cfg.model.name),
         args=args,
         train_dataset=WindowDataset(train),
